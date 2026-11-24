@@ -96,23 +96,39 @@ export class BinanceClient {
     }));
   }
 
+  /** Birden çok sembolün anlık fiyatı: { SYMBOL: fiyat } */
+  async prices(symbols) {
+    const rows = await this.request('GET', '/api/v3/ticker/price', { symbols: JSON.stringify(symbols) });
+    return Object.fromEntries(rows.map((r) => [r.symbol, Number(r.price)]));
+  }
+
+  /** Tüm sembollerin 24 saatlik özeti (hacim sıralaması için). */
+  tickers24h() {
+    return this.request('GET', '/api/v3/ticker/24hr', { type: 'MINI' });
+  }
+
+  exchangeInfo(symbols) {
+    return this.request('GET', '/api/v3/exchangeInfo', symbols ? { symbols: JSON.stringify(symbols) } : {});
+  }
+
+  /** Sembolün borsadaki ilk günlük mumunun zamanı (listelenme tarihi). */
+  async firstCandleTime(symbol) {
+    const rows = await this.request('GET', '/api/v3/klines', { symbol, interval: '1d', startTime: 0, limit: 1 });
+    return rows.length ? rows[0][0] : Date.now();
+  }
+
   /** Sembolün işlem kurallarını (min. miktar, adım, min. tutar) döner. */
   async symbolRules(symbol) {
-    const info = await this.request('GET', '/api/v3/exchangeInfo', { symbol });
-    const s = info.symbols?.[0];
-    if (!s) throw new BinanceError(`Sembol bulunamadı: ${symbol}`);
-    const f = Object.fromEntries(s.filters.map((x) => [x.filterType, x]));
-    return {
-      symbol: s.symbol,
-      status: s.status,
-      baseAsset: s.baseAsset,
-      quoteAsset: s.quoteAsset,
-      quotePrecision: s.quoteAssetPrecision ?? s.quotePrecision ?? 8,
-      stepSize: f.LOT_SIZE?.stepSize ?? '0.00000001',
-      minQty: Number(f.LOT_SIZE?.minQty ?? 0),
-      tickSize: f.PRICE_FILTER?.tickSize ?? '0.01',
-      minNotional: Number(f.NOTIONAL?.minNotional ?? f.MIN_NOTIONAL?.minNotional ?? 0),
-    };
+    return (await this.rulesFor([symbol]))[symbol];
+  }
+
+  /** Birden çok sembolün işlem kuralları: { SYMBOL: kurallar } */
+  async rulesFor(symbols) {
+    const info = await this.exchangeInfo(symbols);
+    const out = {};
+    for (const s of info.symbols || []) out[s.symbol] = rulesFromInfo(s);
+    for (const sym of symbols) if (!out[sym]) throw new BinanceError(`Sembol bulunamadı: ${sym}`);
+    return out;
   }
 
   // ---- Hesap uçları (imzalı) ----
@@ -132,8 +148,9 @@ export class BinanceClient {
     return out;
   }
 
+  /** Açık emirler; sembol verilmezse tüm semboller. */
   openOrders(symbol) {
-    return this.request('GET', '/api/v3/openOrders', { symbol }, { signed: true });
+    return this.request('GET', '/api/v3/openOrders', symbol ? { symbol } : {}, { signed: true });
   }
 
   newOrder(params) {
@@ -148,4 +165,19 @@ export class BinanceClient {
   cancelOrder(symbol, orderId) {
     return this.request('DELETE', '/api/v3/order', { symbol, orderId }, { signed: true });
   }
+}
+
+export function rulesFromInfo(s) {
+  const f = Object.fromEntries(s.filters.map((x) => [x.filterType, x]));
+  return {
+    symbol: s.symbol,
+    status: s.status,
+    baseAsset: s.baseAsset,
+    quoteAsset: s.quoteAsset,
+    quotePrecision: s.quoteAssetPrecision ?? s.quotePrecision ?? 8,
+    stepSize: f.LOT_SIZE?.stepSize ?? '0.00000001',
+    minQty: Number(f.LOT_SIZE?.minQty ?? 0),
+    tickSize: f.PRICE_FILTER?.tickSize ?? '0.01',
+    minNotional: Number(f.NOTIONAL?.minNotional ?? f.MIN_NOTIONAL?.minNotional ?? 0),
+  };
 }

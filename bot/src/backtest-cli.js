@@ -2,43 +2,51 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadEnvFile, loadConfig } from './config.js';
 import { runBacktest } from './backtest.js';
-import { loadHistory, loadCsv, intervalMs } from './history.js';
+import { loadHistory, loadCsv, intervalMs, HISTORY_BASE_URL } from './history.js';
+import { BinanceClient } from './binance.js';
+import { selectUniverse } from './universe.js';
+import { FETCH_CANDLES } from './analysis.js';
 
 const HELP = `
 Kullanım: npm run backtest -- [seçenekler]
 
-Veri:
-  --days N            Son N gün (varsayılan 90)
-  --from 2026-01-01   Başlangıç tarihi (UTC)
-  --to   2026-06-30   Bitiş tarihi (UTC, dahil)
-  --csv dosya.csv     İndirmek yerine data.binance.vision CSV dosyası kullan (birden fazla verilebilir)
+Coinler (varsayılan: .env, o da boşsa hacme göre BUGÜNKÜ ilk 10):
+  --top 10                 Hacme göre ilk N coin
+  --symbols BTCUSDT,ETHUSDT  Sabit liste
+  --csv BTCUSDT=dosya.csv  İndirmek yerine CSV kullan (birden fazla verilebilir)
+
+Dönem:
+  --days N            Son N gün (varsayılan 365)
+  --from 2025-01-01   Başlangıç tarihi (UTC)
+  --to   2025-12-31   Bitiş tarihi (UTC, dahil)
 
 Strateji (varsayılanlar .env dosyasından):
-  --symbol BTCUSDT  --interval 15m  --fast 9  --slow 21
-  --sl 3            Zarar durdur %  (0 = kapalı)
-  --tp 6            Kâr al %        (0 = kapalı)
-  --amount 20       İşlem başına quote tutarı
-  --max-trades 10   Günlük en fazla işlem
-  --fee 0.1         İşlem başına komisyon % (BNB ile ödeme: 0.075)
-  --slippage 0.05   İşlem başına kayma %
+  --interval 4h       Mum aralığı
+  --buy-score 3       Alım için gereken en az skor (1..5)
+  --sell-score -2     Satış skoru (-5..0)
+  --no-trend          Alımda "fiyat EMA200 üstünde" şartını kaldır
+  --max-open 5        Aynı anda en fazla açık pozisyon
+  --sl 8 --tp 0       Zarar durdur / kâr al % (0 = kapalı)
+  --amount 20         Pozisyon başına quote tutarı
+  --max-trades 20     Günlük en fazla işlem
+  --fee 0.1 --slippage 0.05
 
 Çıktı:
-  --trades          Tüm işlemleri listele
-  --sweep           Farklı SMA kombinasyonlarını karşılaştır
-  --json            Sonucu JSON olarak yaz
+  --trades            Tüm işlemleri listele
+  --sweep             Farklı skor eşiği / zarar durdur ayarlarını karşılaştır
+  --json              Sonucu JSON olarak yaz
 `;
 
 const DAY = 86400e3;
 
 function parse() {
+  const s = { type: 'string' };
   const { values } = parseArgs({
     options: {
-      days: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' },
-      csv: { type: 'string', multiple: true },
-      symbol: { type: 'string' }, interval: { type: 'string' },
-      fast: { type: 'string' }, slow: { type: 'string' },
-      sl: { type: 'string' }, tp: { type: 'string' }, amount: { type: 'string' },
-      'max-trades': { type: 'string' }, fee: { type: 'string' }, slippage: { type: 'string' },
+      top: s, symbols: s, csv: { type: 'string', multiple: true },
+      days: s, from: s, to: s, interval: s,
+      'buy-score': s, 'sell-score': s, 'no-trend': { type: 'boolean' },
+      'max-open': s, sl: s, tp: s, amount: s, 'max-trades': s, fee: s, slippage: s,
       trades: { type: 'boolean' }, sweep: { type: 'boolean' }, json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -64,53 +72,66 @@ const sign = (n) => (n > 0 ? '+' : '') + f2(n);
 const day = (t) => new Date(t).toISOString().slice(0, 10);
 const dt = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
 
-function printSummary(s, o, quote) {
-  const line = (k, v) => console.log(`  ${k.padEnd(26)} ${v}`);
-  console.log(`\n=== Backtest: ${o.symbol} ${o.interval} | SMA ${o.smaFast}/${o.smaSlow} | SL %${o.stopLossPct} TP %${o.takeProfitPct} ===`);
+function printSummary(s, o, q) {
+  const line = (k, v) => console.log(`  ${k.padEnd(28)} ${v}`);
+  console.log(
+    `\n=== Backtest: ${s.symbols} coin | ${o.interval} | alım skoru ≥${o.buyScore}${o.requireTrend ? ' + trend' : ''}, satış ≤${o.sellScore} | SL %${o.stopLossPct} TP %${o.takeProfitPct} ===`,
+  );
   line('Dönem', `${day(s.from)} → ${day(s.to)} (${s.candles} mum)`);
-  line('İşlem başına tutar', `${o.orderQuoteAmount} ${quote} (komisyon %${o.feePct}, kayma %${o.slippagePct})`);
+  line('Sermaye', `${f2(s.capital)} ${q} (${o.maxOpenPositions} pozisyon × ${o.orderQuoteAmount}; komisyon %${o.feePct}, kayma %${o.slippagePct})`);
   console.log('');
-  line('Toplam K/Z', `${sign(s.totalPnl)} ${quote}  (${sign(s.returnPct)}% işlem tutarına göre)`);
-  line('Aynı dönemde al-tut', `${sign(s.buyHoldPct)}%`);
+  line('Toplam K/Z', `${sign(s.totalPnl)} ${q}  (${sign(s.returnPct)}% sermayeye göre)`);
+  line('Aynı coinleri al-tut (eşit)', `${sign(s.buyHoldPct)}%`);
   line('İşlem sayısı', `${s.trades} (kazanan ${s.wins}, kaybeden ${s.losses})`);
   line('Kazanma oranı', `%${f2(s.winRatePct)}`);
-  line('Ort. kazanç / ort. kayıp', `${sign(s.avgWin)} / ${sign(s.avgLoss)} ${quote}`);
-  line('En iyi / en kötü işlem', `${sign(s.bestTrade)} / ${sign(s.worstTrade)} ${quote}`);
+  line('Ort. kazanç / ort. kayıp', `${sign(s.avgWin)} / ${sign(s.avgLoss)} ${q}`);
+  line('En iyi / en kötü işlem', `${sign(s.bestTrade)} / ${sign(s.worstTrade)} ${q}`);
   line('Kâr faktörü', `${f2(s.profitFactor)}  (1'in altı = zarar)`);
-  line('En büyük düşüş', `${f2(s.maxDrawdown)} ${quote} (%${f2(s.maxDrawdownPct)})`);
-  line('Ödenen komisyon', `${f2(s.feesPaid)} ${quote}`);
-  line('Piyasada kalma süresi', `%${f2(s.exposurePct)}`);
+  line('En büyük düşüş', `${f2(s.maxDrawdown)} ${q} (%${f2(s.maxDrawdownPct)})`);
+  line('Ödenen komisyon', `${f2(s.feesPaid)} ${q}`);
+  line('Pozisyonda geçen süre', `%${f2(s.exposurePct)} (aynı anda en çok ${s.maxConcurrent} pozisyon)`);
   line('Çıkış nedenleri', Object.entries(s.exitReasons).map(([k, v]) => `${k}: ${v}`).join(', ') || '-');
-}
 
-function printTrades(trades) {
-  console.log('\n  Giriş              Çıkış              Giriş fiyatı    Çıkış fiyatı         K/Z      %  Neden');
-  for (const t of trades) {
+  console.log('\n  Coin          İşlem  Kazanma%        K/Z   Kâr fak.   Al-tut%');
+  for (const p of [...s.perSymbol].sort((a, b) => b.pnl - a.pnl)) {
     console.log(
-      `  ${dt(t.entryAt)}  ${dt(t.exitAt)}  ${t.entryPrice.toFixed(4).padStart(13)}  ${t.exitPrice.toFixed(4).padStart(13)}` +
-      `  ${sign(t.pnl).padStart(9)}  ${sign(t.pnlPct).padStart(6)}  ${t.reason}`,
+      `  ${p.symbol.padEnd(12)} ${String(p.trades).padStart(6)}  ${f2(p.winRatePct).padStart(8)}  ${sign(p.pnl).padStart(9)}  ${f2(p.profitFactor).padStart(9)}  ${sign(p.buyHoldPct).padStart(8)}`,
     );
   }
 }
 
-function sweep(candles, base) {
-  const fasts = [5, 9, 12, 20, 50];
-  const slows = [21, 30, 50, 100, 200];
+function printTrades(trades) {
+  console.log('\n  Coin         Giriş              Çıkış              Giriş fiyatı    Çıkış fiyatı       K/Z      %  Neden');
+  for (const t of [...trades].sort((a, b) => a.entryAt - b.entryAt)) {
+    console.log(
+      `  ${t.symbol.padEnd(11)}  ${dt(t.entryAt)}  ${dt(t.exitAt)}  ${t.entryPrice.toPrecision(7).padStart(13)}  ${t.exitPrice.toPrecision(7).padStart(13)}` +
+      `  ${sign(t.pnl).padStart(8)}  ${sign(t.pnlPct).padStart(6)}  ${t.reason}`,
+    );
+  }
+}
+
+function sweep(data, base) {
   const rows = [];
-  for (const smaFast of fasts) {
-    for (const smaSlow of slows) {
-      if (smaSlow <= smaFast || candles.length < smaSlow + 2) continue;
-      const { summary } = runBacktest(candles, { ...base, smaFast, smaSlow });
-      rows.push({ smaFast, smaSlow, ...summary, current: smaFast === base.smaFast && smaSlow === base.smaSlow });
+  for (const buyScore of [2, 3, 4]) {
+    for (const sellScore of [-1, -2, -3]) {
+      for (const requireTrend of [true, false]) {
+        for (const stopLossPct of [0, 5, 10]) {
+          const { summary: s } = runBacktest(data, { ...base, buyScore, sellScore, requireTrend, stopLossPct });
+          rows.push({
+            buyScore, sellScore, requireTrend, stopLossPct, ...s,
+            current: buyScore === base.buyScore && sellScore === base.sellScore && requireTrend === base.requireTrend && stopLossPct === base.stopLossPct,
+          });
+        }
+      }
     }
   }
   rows.sort((a, b) => b.totalPnl - a.totalPnl);
-  console.log('\n=== SMA karşılaştırması (K/Z’ye göre sıralı) ===');
-  console.log('   Hızlı/Yavaş   İşlem  Kazanma%       K/Z   Getiri%   Max düşüş%  Kâr faktörü');
+  console.log('\n=== Ayar karşılaştırması (K/Z’ye göre sıralı) ===');
+  console.log('   Alım  Satış  Trend  SL%   İşlem  Kazanma%       K/Z  Getiri%  Max düşüş%  Kâr fak.');
   for (const r of rows) {
     console.log(
-      `${r.current ? ' >' : '  '} ${`${r.smaFast}/${r.smaSlow}`.padStart(11)}  ${String(r.trades).padStart(6)}  ${f2(r.winRatePct).padStart(8)}` +
-      `  ${sign(r.totalPnl).padStart(8)}  ${sign(r.returnPct).padStart(8)}  ${f2(r.maxDrawdownPct).padStart(11)}  ${f2(r.profitFactor).padStart(11)}`,
+      `${r.current ? ' >' : '  '} ${String(r.buyScore).padStart(4)}  ${String(r.sellScore).padStart(5)}  ${(r.requireTrend ? 'evet' : 'hayır').padStart(5)}  ${String(r.stopLossPct).padStart(3)}` +
+      `  ${String(r.trades).padStart(6)}  ${f2(r.winRatePct).padStart(8)}  ${sign(r.totalPnl).padStart(8)}  ${sign(r.returnPct).padStart(7)}  ${f2(r.maxDrawdownPct).padStart(10)}  ${f2(r.profitFactor).padStart(8)}`,
     );
   }
   console.log('  (> = .env dosyasındaki mevcut ayar)');
@@ -128,12 +149,14 @@ async function main() {
   } catch {
     cfg = loadConfig({}); // .env eksik/hatalıysa varsayılanlar
   }
+  const log = (m) => !a.json && process.stderr.write(m);
 
   const o = {
-    symbol: (a.symbol || cfg.symbol).toUpperCase(),
     interval: a.interval || cfg.interval,
-    smaFast: num(a.fast, cfg.smaFast, 'fast'),
-    smaSlow: num(a.slow, cfg.smaSlow, 'slow'),
+    buyScore: num(a['buy-score'], cfg.buyScore, 'buy-score'),
+    sellScore: num(a['sell-score'], cfg.sellScore, 'sell-score'),
+    requireTrend: a['no-trend'] ? false : cfg.requireTrend,
+    maxOpenPositions: num(a['max-open'], cfg.maxOpenPositions, 'max-open'),
     stopLossPct: num(a.sl, cfg.stopLossPct, 'sl'),
     takeProfitPct: num(a.tp, cfg.takeProfitPct, 'tp'),
     orderQuoteAmount: num(a.amount, cfg.orderQuoteAmount, 'amount'),
@@ -141,34 +164,59 @@ async function main() {
     feePct: num(a.fee, 0.1, 'fee'),
     slippagePct: num(a.slippage, 0.05, 'slippage'),
   };
-  if (o.smaSlow <= o.smaFast) throw new Error('--slow, --fast değerinden büyük olmalı');
 
-  let candles;
+  const step = intervalMs(o.interval);
+  const endTime = a.to ? parseDate(a.to, 'to') + DAY : Math.floor(Date.now() / step) * step;
+  const startTime = a.from ? parseDate(a.from, 'from') : endTime - num(a.days, 365, 'days') * DAY;
+  if (startTime >= endTime) throw new Error('Başlangıç tarihi bitişten önce olmalı');
+  const warmStart = startTime - FETCH_CANDLES * step; // göstergeleri ısıtmak için ek geçmiş
+
+  const data = {};
+  let survivorshipNote = false;
   if (a.csv) {
-    candles = loadCsv(a.csv);
+    for (const spec of a.csv) {
+      const [sym, file] = spec.split('=');
+      if (!file) throw new Error('--csv SEMBOL=dosya.csv biçiminde olmalı');
+      data[sym.toUpperCase()] = loadCsv(file).filter((k) => k.openTime >= warmStart && k.openTime < endTime);
+    }
   } else {
-    const step = intervalMs(o.interval);
-    const endTime = a.to ? parseDate(a.to, 'to') + DAY : Math.floor(Date.now() / step) * step;
-    const startTime = a.from ? parseDate(a.from, 'from') : endTime - num(a.days, 90, 'days') * DAY;
-    if (startTime >= endTime) throw new Error('Başlangıç tarihi bitişten önce olmalı');
-    if (!a.json) process.stderr.write(`Geçmiş veri indiriliyor: ${o.symbol} ${o.interval} ${day(startTime)} → ${day(endTime - 1)} ...`);
-    candles = await loadHistory(
-      { symbol: o.symbol, interval: o.interval, startTime, endTime, onProgress: (n) => !a.json && process.stderr.write(`\r  ${n} mum indirildi   `) },
-      path.join(cfg.dataDir, 'history'),
-    );
-    if (!a.json) process.stderr.write('\n');
+    let symbols = a.symbols ? a.symbols.split(',').map((x) => x.trim().toUpperCase()) : cfg.symbols;
+    if (!symbols.length) {
+      const top = num(a.top, cfg.topN, 'top');
+      log(`Hacme göre bugünkü ilk ${top} coin belirleniyor...`);
+      const client = new BinanceClient({ baseUrl: HISTORY_BASE_URL, timeoutMs: 30000 });
+      const u = await selectUniverse(client, {
+        topN: top, quote: cfg.quoteAsset, exclude: cfg.excludeAssets, minListingDays: cfg.minListingDays,
+      });
+      symbols = u.symbols;
+      survivorshipNote = true;
+      log(` ${symbols.join(', ')}\n`);
+      if (u.skipped.length) log(`  (elenen: ${u.skipped.map((x) => `${x.symbol} – ${x.reason}`).join('; ')})\n`);
+    }
+    for (const symbol of symbols) {
+      log(`  ${symbol} ${o.interval} indiriliyor...`);
+      data[symbol] = await loadHistory(
+        { symbol, interval: o.interval, startTime: warmStart, endTime },
+        path.join(cfg.dataDir, 'history'),
+      );
+      log(` ${data[symbol].length} mum\n`);
+    }
   }
 
-  const quote = o.symbol.match(/(USDT|USDC|FDUSD|BUSD|TRY|EUR|BTC|ETH|BNB)$/)?.[1] || 'quote';
-  const result = runBacktest(candles, o);
+  const q = cfg.quoteAsset;
+  const result = runBacktest(data, { ...o, tradeFrom: startTime });
 
   if (a.json) {
     console.log(JSON.stringify({ options: o, summary: result.summary, trades: result.trades }, null, 2));
     return;
   }
-  printSummary(result.summary, o, quote);
+  printSummary(result.summary, o, q);
   if (a.trades) printTrades(result.trades);
-  if (a.sweep) sweep(candles, o);
+  if (a.sweep) sweep(data, { ...o, tradeFrom: startTime });
+  if (survivorshipNote) {
+    console.log('\n  Not: Coin listesi BUGÜNKÜ hacme göre seçildi. Geçmişte bu coinler ilk 10’da olmayabilirdi;');
+    console.log('  bugün popüler olan coinler geçmişte iyi gitmiş olmaya yatkındır (hayatta kalma yanlılığı).');
+  }
   console.log('\n  Not: Geçmiş performans gelecekteki sonuçları garanti etmez.\n');
 }
 

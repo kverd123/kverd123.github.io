@@ -2,7 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const DEFAULT_STATE = () => ({
-  position: null, // { qty, entryPrice, openedAt, dryRun }
+  positions: {}, // { SYMBOL: { qty, entryPrice, cost, openedAt, dryRun } }
+  universe: { symbols: [], skipped: [], updatedAt: null },
+  analysis: {}, // { SYMBOL: son analiz }
+  listingCache: {}, // { SYMBOL: listelenme zamanı }
   daily: { date: null, trades: 0 },
   realizedPnl: 0,
   history: [],

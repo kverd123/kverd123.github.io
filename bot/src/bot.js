@@ -1,12 +1,19 @@
 import { floorToStep } from './binance.js';
-import { smaCrossSignal, exitCheck } from './strategy.js';
+import { computeSeries, evaluateAt, FETCH_CANDLES, MIN_CANDLES } from './analysis.js';
+import { exitCheck } from './strategy.js';
+import { selectUniverse } from './universe.js';
+import { intervalMs } from './history.js';
 
 const today = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 /**
- * Basit spot botu: SMA kesişiminde alır, ters kesişimde veya zarar durdur / kâr al
- * seviyesinde satar. Aynı anda en fazla bir pozisyon tutar ve sadece kendi aldığı
- * miktarı satar (hesaptaki diğer varlıklarınıza dokunmaz).
+ * Çoklu coin spot botu.
+ *  - Coin evreni: sabit liste (SYMBOLS) ya da hacme göre ilk N coin (günde bir yenilenir).
+ *  - Her coin, yeni bir mum kapandığında beş yöntemle analiz edilir (bkz. analysis.js).
+ *  - Skor yeterliyse alır, skor düşerse veya zarar durdur / kâr al tetiklenirse satar.
+ *  - Her coinde en fazla bir pozisyon, toplamda en fazla MAX_OPEN_POSITIONS pozisyon.
+ *  - Sadece kendi aldığı miktarları satar; hesaptaki diğer varlıklara dokunmaz.
+ *  - Evrenden düşen bir coinde açık pozisyon varsa, kapanana kadar yönetilmeye devam eder.
  */
 export class TradingBot {
   constructor({ client, config, store, notify = async () => {}, logger, now = () => Date.now() }) {
@@ -16,11 +23,13 @@ export class TradingBot {
     this.notify = notify;
     this.log = logger;
     this.now = now;
-    this.rules = null;
+    this.rules = {};
     this.running = false;
     this.busy = false;
     this.timer = null;
     this.lastError = null;
+    this.symbolErrors = {};
+    this.intervalMs = intervalMs(config.interval);
   }
 
   get state() {
@@ -35,18 +44,48 @@ export class TradingBot {
         this.log.warn(`Saat senkronu başarısız: ${e.message}`);
       }
     }
-    this.rules = await this.client.symbolRules(this.cfg.symbol);
-    if (this.rules.status !== 'TRADING') {
-      throw new Error(`${this.cfg.symbol} şu an işleme kapalı (durum: ${this.rules.status})`);
-    }
-    if (this.rules.minNotional && this.cfg.orderQuoteAmount < this.rules.minNotional) {
-      throw new Error(
-        `ORDER_QUOTE_AMOUNT (${this.cfg.orderQuoteAmount}) borsanın minimumunun altında (${this.rules.minNotional} ${this.rules.quoteAsset})`,
-      );
-    }
+    await this.refreshUniverse(true);
     this.log.info(
-      `Hazır: ${this.cfg.symbol} ${this.cfg.interval} | ortam=${this.cfg.binanceEnv} | dryRun=${this.cfg.dryRun}`,
+      `Hazır: ${this.state.universe.symbols.join(', ')} | ${this.cfg.interval} | ortam=${this.cfg.binanceEnv} | dryRun=${this.cfg.dryRun}`,
     );
+  }
+
+  /** İzlenecek coin listesini günceller (sabit liste ya da hacme göre ilk N). */
+  async refreshUniverse(force = false) {
+    const u = this.state.universe;
+    const stale = !u.updatedAt || this.now() - u.updatedAt > this.cfg.universeRefreshHours * 3600e3;
+    if (!force && !stale && u.symbols.length) return;
+
+    let symbols, skipped = [];
+    if (this.cfg.symbols.length) {
+      symbols = this.cfg.symbols;
+    } else {
+      const res = await selectUniverse(this.client, {
+        topN: this.cfg.topN,
+        quote: this.cfg.quoteAsset,
+        exclude: this.cfg.excludeAssets,
+        minListingDays: this.cfg.minListingDays,
+        listingCache: this.state.listingCache,
+        now: this.now(),
+      });
+      symbols = res.symbols;
+      skipped = res.skipped;
+    }
+    if (!symbols.length) throw new Error('İzlenecek coin bulunamadı');
+
+    const needed = [...new Set([...symbols, ...Object.keys(this.state.positions)])];
+    const missing = needed.filter((s) => !this.rules[s]);
+    if (missing.length) Object.assign(this.rules, await this.client.rulesFor(missing));
+
+    const changed = symbols.join() !== u.symbols.join();
+    this.state.universe = { symbols, skipped, updatedAt: this.now() };
+    if (changed) this.log.info(`Coin listesi: ${symbols.join(', ')}`);
+    this.store.save();
+  }
+
+  /** Analiz edilen coinler: güncel liste + listeden düşmüş ama pozisyonu açık olanlar. */
+  watched() {
+    return [...new Set([...this.state.universe.symbols, ...Object.keys(this.state.positions)])];
   }
 
   start() {
@@ -70,34 +109,39 @@ export class TradingBot {
     return true;
   }
 
-  /** Bir karar döngüsü. Hataları yakalar, döngüyü kırmaz. */
+  /** Bir karar döngüsü: tüm coinleri gözden geçirir. Bir coindeki hata diğerlerini durdurmaz. */
   async tick() {
     if (this.busy) return null;
     this.busy = true;
+    const now = this.now();
     try {
-      if (!this.rules) await this.init();
-      const { symbol, interval, smaFast, smaSlow } = this.cfg;
-      const now = this.now();
-
-      const klines = await this.client.klines(symbol, interval, smaSlow + 5);
-      const closes = klines.filter((k) => k.closeTime < now).map((k) => k.close);
-      const sig = smaCrossSignal(closes, smaFast, smaSlow);
-      const price = await this.client.price(symbol);
-      const exitReason = exitCheck(this.state.position, price, this.cfg);
-
-      let action = 'HOLD';
-      if (!this.state.position && sig.signal === 'BUY') {
-        action = (await this.buy(price)) ? 'BUY' : 'HOLD';
-      } else if (this.state.position && (sig.signal === 'SELL' || exitReason)) {
-        action = (await this.sell(price, exitReason || sig.reason)) ? 'SELL' : 'HOLD';
+      if (!this.state.universe.symbols.length) await this.init();
+      try {
+        await this.refreshUniverse();
+      } catch (e) {
+        this.log.warn(`Coin listesi yenilenemedi, eski liste kullanılıyor: ${e.message}`);
       }
 
-      this.state.lastTick = { at: now, price, signal: sig.signal, fast: sig.fast, slow: sig.slow, action };
+      const symbols = this.watched();
+      const prices = await this.client.prices(symbols);
+      const actions = [];
+      for (const symbol of symbols) {
+        try {
+          const action = await this.handleSymbol(symbol, prices[symbol], now);
+          if (action) actions.push(`${action} ${symbol}`);
+          delete this.symbolErrors[symbol];
+        } catch (e) {
+          this.symbolErrors[symbol] = { at: now, message: e.message };
+          this.log.error(`${symbol}: ${e.message}`);
+        }
+      }
+
+      this.state.lastTick = { at: now, actions };
       this.lastError = null;
       this.store.save();
       return this.state.lastTick;
     } catch (e) {
-      this.lastError = { at: this.now(), message: e.message };
+      this.lastError = { at: now, message: e.message };
       this.log.error(`Döngü hatası: ${e.message}`);
       return null;
     } finally {
@@ -105,34 +149,78 @@ export class TradingBot {
     }
   }
 
-  canTrade() {
+  async handleSymbol(symbol, price, now) {
+    if (!(price > 0)) throw new Error('fiyat alınamadı');
+    if (!this.rules[symbol]) Object.assign(this.rules, await this.client.rulesFor([symbol]));
+
+    // Yeni mum kapandıysa yeniden analiz et; sinyaller sadece mum kapanışında üretilir.
+    let a = this.state.analysis[symbol];
+    let fresh = false;
+    if (!a || now >= a.nextCloseAt) {
+      const klines = await this.client.klines(symbol, this.cfg.interval, FETCH_CANDLES + 1);
+      const closed = klines.filter((k) => k.closeTime < now);
+      if (closed.length < MIN_CANDLES) throw new Error(`yetersiz geçmiş veri (${closed.length} mum)`);
+      const series = computeSeries(closed);
+      const ev = evaluateAt(series, closed.length - 1, this.cfg);
+      const last = closed.at(-1);
+      a = {
+        ...ev,
+        candleCloseTime: last.closeTime,
+        nextCloseAt: last.closeTime + this.intervalMs,
+        analyzedAt: now,
+      };
+      this.state.analysis[symbol] = a;
+      fresh = true;
+    }
+    a.price = price;
+
+    const pos = this.state.positions[symbol];
+    const exitReason = exitCheck(pos, price, this.cfg);
+    if (pos && (exitReason || (fresh && a.signal === 'SELL'))) {
+      return (await this.sell(symbol, price, exitReason || `analiz skoru ${a.score}`)) ? 'SELL' : null;
+    }
+    if (!pos && fresh && a.signal === 'BUY' && this.state.universe.symbols.includes(symbol)) {
+      const open = Object.keys(this.state.positions).length;
+      if (open >= this.cfg.maxOpenPositions) {
+        this.log.info(`${symbol}: alım sinyali var ama pozisyon limiti dolu (${open}/${this.cfg.maxOpenPositions})`);
+        return null;
+      }
+      return (await this.buy(symbol, price, `analiz skoru ${a.score}`)) ? 'BUY' : null;
+    }
+    return null;
+  }
+
+  canBuyToday() {
     const d = today(this.now());
     if (this.state.daily.date !== d) this.state.daily = { date: d, trades: 0 };
     if (this.state.daily.trades >= this.cfg.maxTradesPerDay) {
-      this.log.warn(`Günlük işlem limiti (${this.cfg.maxTradesPerDay}) doldu, işlem atlandı`);
+      this.log.warn(`Günlük işlem limiti (${this.cfg.maxTradesPerDay}) doldu, alım atlandı`);
       return false;
     }
     return true;
   }
 
-  async buy(price) {
-    if (!this.canTrade()) return false;
-    const { symbol, orderQuoteAmount, dryRun } = this.cfg;
-    const quoteQty = floorToStep(orderQuoteAmount, (10 ** -this.rules.quotePrecision).toFixed(this.rules.quotePrecision));
+  async buy(symbol, price, reason) {
+    if (!this.canBuyToday()) return false;
+    const r = this.rules[symbol];
+    const { orderQuoteAmount, dryRun } = this.cfg;
+    if (r.minNotional && orderQuoteAmount < r.minNotional) {
+      this.log.warn(`${symbol}: ORDER_QUOTE_AMOUNT borsa minimumunun (${r.minNotional}) altında`);
+      return false;
+    }
+    const quoteQty = floorToStep(orderQuoteAmount, (10 ** -r.quotePrecision).toFixed(r.quotePrecision));
     let qty, avg, orderId;
 
     if (dryRun) {
-      qty = Number(floorToStep(orderQuoteAmount / price, this.rules.stepSize));
+      qty = Number(floorToStep(orderQuoteAmount / price, r.stepSize));
       avg = price;
       orderId = 'dry-run';
-      if (this.cfg.apiKey) {
-        await this.client.testOrder({ symbol, side: 'BUY', type: 'MARKET', quoteOrderQty: quoteQty });
-      }
+      if (this.cfg.apiKey) await this.client.testOrder({ symbol, side: 'BUY', type: 'MARKET', quoteOrderQty: quoteQty });
     } else {
       const bal = await this.client.balances();
-      const free = bal[this.rules.quoteAsset]?.free ?? 0;
+      const free = bal[r.quoteAsset]?.free ?? 0;
       if (free < orderQuoteAmount) {
-        this.log.warn(`Yetersiz ${this.rules.quoteAsset} bakiyesi (${free}), alım atlandı`);
+        this.log.warn(`${symbol}: yetersiz ${r.quoteAsset} bakiyesi (${free}), alım atlandı`);
         return false;
       }
       const res = await this.client.newOrder({ symbol, side: 'BUY', type: 'MARKET', quoteOrderQty: quoteQty });
@@ -141,31 +229,31 @@ export class TradingBot {
       orderId = res.orderId;
     }
     if (!(qty > 0)) {
-      this.log.warn('Alım emri dolmadı');
+      this.log.warn(`${symbol}: alım emri dolmadı`);
       return false;
     }
 
-    this.state.position = { qty, entryPrice: avg, openedAt: this.now(), dryRun };
-    this.record({ side: 'BUY', qty, price: avg, orderId });
-    await this.notify(`${dryRun ? '[DRY-RUN] ' : ''}ALIM ${symbol}: ${qty} @ ${avg.toFixed(4)}`);
+    this.state.positions[symbol] = { qty, entryPrice: avg, cost: qty * avg, openedAt: this.now(), dryRun };
+    this.record({ symbol, side: 'BUY', qty, price: avg, orderId, reason });
+    await this.notify(`${dryRun ? '[DRY-RUN] ' : ''}ALIM ${symbol}: ${qty} @ ${avg} (${reason})`);
     return true;
   }
 
   // Not: satışta günlük limit uygulanmaz; zarar durdur her zaman çalışabilmeli.
-  async sell(price, reason) {
-    this.canTrade(); // gün değiştiyse sayacı sıfırlar
-    const { symbol, dryRun } = this.cfg;
-    const pos = this.state.position;
+  async sell(symbol, price, reason) {
+    const r = this.rules[symbol];
+    const { dryRun } = this.cfg;
+    const pos = this.state.positions[symbol];
     let qtyWanted = pos.qty;
     if (!dryRun) {
       const bal = await this.client.balances();
-      qtyWanted = Math.min(pos.qty, bal[this.rules.baseAsset]?.free ?? 0);
+      qtyWanted = Math.min(pos.qty, bal[r.baseAsset]?.free ?? 0);
     }
-    const qtyStr = floorToStep(qtyWanted, this.rules.stepSize);
+    const qtyStr = floorToStep(qtyWanted, r.stepSize);
     const qtyNum = Number(qtyStr);
-    if (qtyNum < this.rules.minQty || qtyNum * price < this.rules.minNotional) {
-      this.log.warn(`Satılacak miktar borsa minimumunun altında (${qtyStr}); pozisyon kapatıldı olarak işaretlendi`);
-      this.state.position = null;
+    if (qtyNum < r.minQty || qtyNum * price < r.minNotional) {
+      this.log.warn(`${symbol}: satılacak miktar borsa minimumunun altında (${qtyStr}); pozisyon kapatıldı olarak işaretlendi`);
+      delete this.state.positions[symbol];
       return false;
     }
 
@@ -174,9 +262,7 @@ export class TradingBot {
       qty = qtyNum;
       avg = price;
       orderId = 'dry-run';
-      if (this.cfg.apiKey) {
-        await this.client.testOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: qtyStr });
-      }
+      if (this.cfg.apiKey) await this.client.testOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: qtyStr });
     } else {
       const res = await this.client.newOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: qtyStr });
       qty = Number(res.executedQty);
@@ -186,10 +272,11 @@ export class TradingBot {
 
     const pnl = (avg - pos.entryPrice) * qty;
     this.state.realizedPnl += pnl;
-    this.state.position = null;
-    this.record({ side: 'SELL', qty, price: avg, orderId, pnl, reason });
+    delete this.state.positions[symbol];
+    this.canBuyToday(); // gün değiştiyse sayacı sıfırlar
+    this.record({ symbol, side: 'SELL', qty, price: avg, orderId, pnl, reason });
     await this.notify(
-      `${dryRun ? '[DRY-RUN] ' : ''}SATIM ${symbol}: ${qty} @ ${avg.toFixed(4)} | K/Z: ${pnl.toFixed(4)} ${this.rules.quoteAsset} | ${reason}`,
+      `${dryRun ? '[DRY-RUN] ' : ''}SATIM ${symbol}: ${qty} @ ${avg} | K/Z: ${pnl.toFixed(4)} ${r.quoteAsset} | ${reason}`,
     );
     return true;
   }
@@ -197,16 +284,20 @@ export class TradingBot {
   record(trade) {
     this.state.daily.trades += 1;
     this.state.history.unshift({ at: this.now(), dryRun: this.cfg.dryRun, ...trade });
-    this.state.history = this.state.history.slice(0, 100);
-    this.log.info(`${trade.side} ${trade.qty} @ ${trade.price}${trade.pnl !== undefined ? ` (K/Z ${trade.pnl.toFixed(4)})` : ''}`);
+    this.state.history = this.state.history.slice(0, 200);
+    this.log.info(
+      `${trade.side} ${trade.symbol} ${trade.qty} @ ${trade.price}${trade.pnl !== undefined ? ` (K/Z ${trade.pnl.toFixed(4)})` : ''} — ${trade.reason}`,
+    );
   }
 
   status() {
+    const { listingCache, ...state } = this.state;
     return {
       running: this.running,
-      rules: this.rules,
       lastError: this.lastError,
-      ...this.state,
+      symbolErrors: this.symbolErrors,
+      quoteAsset: this.cfg.quoteAsset,
+      ...state,
     };
   }
 }

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { loadEnvFile, loadConfig } from './config.js';
 import { BinanceClient } from './binance.js';
@@ -5,6 +6,20 @@ import { JsonStore } from './store.js';
 import { TradingBot } from './bot.js';
 import { createServer } from './server.js';
 import { createLogger, createNotifier } from './notify.js';
+
+// Tek coinli eski sürümden kalan açık pozisyon varsa kullanıcıyı uyar (otomatik taşınmaz).
+function warnOldState(config, logger) {
+  if (!fs.existsSync(config.dataDir)) return;
+  for (const f of fs.readdirSync(config.dataDir)) {
+    if (!/^state-.*\.json$/.test(f) || f.endsWith('-portfolio.json')) continue;
+    try {
+      const old = JSON.parse(fs.readFileSync(path.join(config.dataDir, f), 'utf8'));
+      if (old.position) {
+        logger.warn(`Eski sürümden açık pozisyon var (${f}: ${old.position.qty} @ ${old.position.entryPrice}). Bu pozisyonu yeni bot yönetmez; gerekirse Binance'te elle kapatın.`);
+      }
+    } catch {}
+  }
+}
 
 async function main() {
   loadEnvFile();
@@ -16,7 +31,8 @@ async function main() {
   }
 
   const client = new BinanceClient({ baseUrl: config.baseUrl, apiKey: config.apiKey, apiSecret: config.apiSecret });
-  const store = new JsonStore(path.join(config.dataDir, `state-${config.binanceEnv}-${config.symbol}.json`));
+  const store = new JsonStore(path.join(config.dataDir, `state-${config.binanceEnv}-portfolio.json`));
+  warnOldState(config, logger);
   const notify = createNotifier(config, logger);
   const bot = new TradingBot({ client, config, store, notify, logger });
 
