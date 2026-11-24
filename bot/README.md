@@ -88,6 +88,33 @@ curl -X POST -H "Authorization: Bearer $API_AUTH_TOKEN" http://127.0.0.1:8787/ap
 
 Sunucu varsayılan olarak yalnızca `127.0.0.1` adresini dinler. İnternete açmanız gerekirse önüne HTTPS'li bir reverse proxy (Caddy, nginx) ya da Cloudflare Tunnel koyun. Token'ı hiçbir zaman herkese açık bir sayfaya gömmeyin.
 
+## Geçmiş test (backtest)
+
+Bu araç, stratejiyi canlı botla aynı kurallarla geçmiş gerçek fiyatlar üzerinde çalıştırır. API anahtarı gerekmez.
+
+```bash
+npm run backtest                                   # .env ayarlarıyla son 90 gün
+npm run backtest -- --days 365 --interval 1h       # son 1 yıl, saatlik mumlar
+npm run backtest -- --from 2025-01-01 --to 2025-06-30 --fast 12 --slow 50 --sl 2 --tp 5
+npm run backtest -- --sweep                        # farklı SMA kombinasyonlarını karşılaştır
+npm run backtest -- --trades                       # her işlemi tek tek listele
+npm run backtest -- --help
+```
+
+Rapor şunları gösterir:
+- Toplam kâr/zarar ve aynı dönemde sadece alıp tutsaydınız ne olacağı
+- Kazanma oranı, kâr faktörü ve en büyük düşüş
+- Ödenen komisyon ve çıkış nedenleri
+
+**Gerçekçilik varsayımları:**
+- Emir, sinyalden sonraki mumun açılışında dolar.
+- Varsayılan komisyon her işlemde %0,1, kayma %0,05.
+- Zarar durdur ve kâr al, mum içindeki en düşük ve en yüksek fiyata göre kontrol edilir. Fiyat seviyenin ötesinde açılırsa (boşluk), emir açılış fiyatından dolar. Aynı mumda ikisi birden tetiklenirse kötümser varsayımla zarar durdur sayılır.
+
+Veri `data-api.binance.vision` adresinden indirilir ve `data/history/` klasörüne önbelleklenir. Bu adrese erişiminiz yoksa https://data.binance.vision adresinden aylık CSV dosyalarını indirip `--csv dosya1.csv --csv dosya2.csv` ile verebilirsiniz.
+
+> **Dikkat:** `--sweep` sonucunda en iyi çıkan ayar, büyük olasılıkla o döneme "ezberlenmiştir" (aşırı uyum). Seçtiğiniz ayarı mutlaka başka bir dönemde de deneyin. Bir ayar ancak iki dönemde de iyi sonuç veriyorsa anlamlıdır. Geçmiş sonuçlar geleceği garanti etmez.
+
 ## Web paneli
 
 Site üzerinde hazır bir panel var: **https://kverd123.github.io/panel/**
@@ -127,6 +154,8 @@ Token sayfaya gömülü değildir. Sadece sizin tarayıcınızda saklanır ve "h
 ```
 src/binance.js   Binance REST istemcisi (HMAC imza, saat senkronu, borsa kuralları)
 src/strategy.js  SMA kesişimi, zarar durdur / kâr al
+src/backtest.js  Geçmiş veri üzerinde simülasyon
+src/history.js   Geçmiş mum verisini indirme / CSV okuma
 src/bot.js       Karar döngüsü, risk kontrolleri, emir gönderme
 src/server.js    Token korumalı HTTP API
 src/store.js     Durumun diske yazılması
