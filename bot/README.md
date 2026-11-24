@@ -74,6 +74,7 @@ Pozisyon ve işlem geçmişi `data/` klasörüne yazılır. Bu sayede servis yen
 | `GET /api/price?symbol=ETHUSDT` | Anlık fiyat |
 | `GET /api/balance` | Sıfır olmayan bakiyeler |
 | `GET /api/orders/open?symbol=BTCUSDT` | Açık emirler |
+| `GET /api/klines` | Grafik için kapanış fiyatları ve SMA değerleri |
 | `POST /api/bot/start` | Botu başlat |
 | `POST /api/bot/stop` | Botu durdur |
 | `POST /api/bot/tick` | Tek bir döngüyü hemen çalıştır |
@@ -86,6 +87,28 @@ curl -X POST -H "Authorization: Bearer $API_AUTH_TOKEN" http://127.0.0.1:8787/ap
 ```
 
 Sunucu varsayılan olarak yalnızca `127.0.0.1` adresini dinler. İnternete açmanız gerekirse önüne HTTPS'li bir reverse proxy (Caddy, nginx) ya da Cloudflare Tunnel koyun. Token'ı hiçbir zaman herkese açık bir sayfaya gömmeyin.
+
+## Web paneli
+
+Site üzerinde hazır bir panel var: **https://kverd123.github.io/panel/**
+
+Panelde şunlar görünür:
+- Bot durumu, anlık fiyat ve sinyal
+- Açık pozisyon ve anlık kâr/zarar
+- Grafik (kapanış fiyatı, iki SMA çizgisi ve giriş fiyatı)
+- Bakiyeler, açık emirler ve işlem geçmişi
+- Başlat / Durdur / Şimdi çalıştır düğmeleri
+
+Veriler 10 saniyede bir yenilenir. Panel sizin backend'inize bağlanır; Binance'e doğrudan istek atmaz.
+
+1. Backend'in `.env` dosyasında `ALLOWED_ORIGIN=https://kverd123.github.io` olsun.
+2. Paneli açın, backend adresini (ör. `http://127.0.0.1:8787`) ve `API_AUTH_TOKEN` değerini girin.
+
+Tarayıcı notları:
+- Chrome, Edge ve Firefox, https bir sayfadan `http://127.0.0.1` adresine bağlanmaya izin verir.
+- **Safari** buna izin vermeyebilir. Ayrıca backend başka bir makinede çalışıyorsa adresin **https** olması gerekir (Caddy veya Cloudflare Tunnel ile).
+
+Token sayfaya gömülü değildir. Sadece sizin tarayıcınızda saklanır ve "hatırla" işaretlenmezse sekme kapanınca silinir.
 
 ## Sürekli çalıştırma
 

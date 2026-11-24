@@ -44,6 +44,8 @@ export function mockBinance({ closes = [], price = 100, balances = { USDT: 1000,
         return json(200, {
           balances: Object.entries(state.balances).map(([asset, free]) => ({ asset, free: String(free), locked: '0' })),
         });
+      case 'GET /api/v3/openOrders':
+        return json(200, []);
       case 'POST /api/v3/order/test':
         return json(200, {});
       case 'POST /api/v3/order': {

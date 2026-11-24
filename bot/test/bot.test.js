@@ -135,3 +135,28 @@ test('API sunucusu: token olmadan 401, token ile 200', async () => {
   }
   assert.throws(() => createServer({ bot, client: bot.client, config: { ...config, authToken: '' }, logger: silentLogger }));
 });
+
+test('API: CORS ön kontrolü ve grafik verisi', async () => {
+  const closes = Array.from({ length: 30 }, (_, i) => 100 + i);
+  const m = mockBinance({ closes, price: 130 });
+  const bot = makeBot(m);
+  const token = 'y'.repeat(32);
+  const config = { ...bot.cfg, authToken: token, allowedOrigin: 'https://kverd123.github.io' };
+  const server = createServer({ bot, client: bot.client, config, logger: silentLogger });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const pre = await fetch(`${base}/api/status`, { method: 'OPTIONS' });
+    assert.equal(pre.status, 204);
+    assert.equal(pre.headers.get('access-control-allow-origin'), 'https://kverd123.github.io');
+    assert.equal(pre.headers.get('access-control-allow-private-network'), 'true');
+
+    const k = await (await fetch(`${base}/api/klines`, { headers: { authorization: `Bearer ${token}` } })).json();
+    assert.equal(k.candles.length, 30, 'açık mum hariç tutulmalı');
+    assert.equal(k.candles[0].fast, null); // test kurulumunda SMA_FAST=2, SMA_SLOW=4
+    assert.equal(k.candles.at(-1).fast, 128.5); // (128+129)/2
+    assert.equal(k.candles.at(-1).slow, 127.5); // (126..129)/4
+  } finally {
+    server.close();
+  }
+});

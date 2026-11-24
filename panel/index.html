@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Bot Paneli</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --surface: #ffffff; --border: #e2e5ea; --text: #1b1f24; --muted: #667080;
+    --accent: #c99400; --up: #0f9d58; --down: #d93025; --warn-bg: #fff4d6; --warn-text: #7a5700;
+    --live-bg: #fde7e7; --live-text: #a1150b; --line-fast: #2f6fdb; --line-slow: #b04fd1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --surface: #181c22; --border: #2a3039; --text: #e7eaee; --muted: #8b95a3;
+      --accent: #f0b90b; --up: #2ebd85; --down: #f6465d; --warn-bg: #3a2f0e; --warn-text: #f3d27a;
+      --live-bg: #3d1518; --live-text: #ff8a8a; --line-fast: #6ea2ff; --line-slow: #d48bf0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.ok { background: var(--up); } .dot.err { background: var(--down); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 12px; }
+  .stat .label { color: var(--muted); font-size: 13px; }
+  .stat .value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; overflow-wrap: anywhere; }
+  .stat .sub { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .section { margin-bottom: 12px; }
+  .two { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    padding: 8px 14px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button.danger { color: var(--down); }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input[type=text], input[type=password], input[type=url] { width: 100%; font: inherit; padding: 9px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .check { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 14px; margin-top: 12px; }
+  .badge { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; letter-spacing: .03em; }
+  .badge.test { background: var(--warn-bg); color: var(--warn-text); }
+  .badge.live { background: var(--live-bg); color: var(--live-text); }
+  .badge.dry { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+  .note { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+  svg { width: 100%; height: auto; display: block; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+  #toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: calc(100% - 32px);
+    background: var(--down); color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; display: none; z-index: 10; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span id="connDot" class="dot" title="Bağlantı"></span> Bot Paneli</h1>
+    <div class="row">
+      <span id="envBadge" class="badge hidden"></span>
+      <span id="dryBadge" class="badge dry hidden">DRY-RUN</span>
+      <button id="settingsBtn" class="hidden">Bağlantı</button>
+    </div>
+  </header>
+
+  <!-- Bağlantı ayarları -->
+  <section id="connect" class="card section">
+    <h2>Backend'e bağlan</h2>
+    <form id="connectForm">
+      <label for="url">Backend adresi</label>
+      <input id="url" type="url" required placeholder="http://127.0.0.1:8787" value="http://127.0.0.1:8787">
+      <label for="token">API_AUTH_TOKEN</label>
+      <input id="token" type="password" required autocomplete="off" placeholder=".env dosyasındaki token">
+      <div class="check"><input id="remember" type="checkbox"><span>Bu tarayıcıda hatırla</span></div>
+      <div class="row" style="margin-top:14px"><button class="primary" type="submit">Bağlan</button></div>
+    </form>
+    <div class="note">
+      Token yalnızca bu tarayıcıda saklanır ve sadece girdiğiniz backend adresine gönderilir.
+      Paylaşılan bir bilgisayarda "hatırla" seçeneğini işaretlemeyin.
+      Backend <code>.env</code> dosyasında <code>ALLOWED_ORIGIN</code> değerinin bu sitenin adresi olduğundan emin olun.
+    </div>
+  </section>
+
+  <main id="dash" class="hidden">
+    <section class="card section">
+      <div class="row" style="justify-content:space-between">
+        <div class="row">
+          <button id="startBtn" class="primary">Başlat</button>
+          <button id="stopBtn" class="danger">Durdur</button>
+          <button id="tickBtn">Şimdi çalıştır</button>
+        </div>
+        <span id="updated" class="muted"></span>
+      </div>
+      <div id="botError" class="note hidden"></div>
+    </section>
+
+    <div class="grid">
+      <div class="card stat"><div class="label">Bot</div><div id="sRunning" class="value">–</div><div id="sSymbol" class="sub"></div></div>
+      <div class="card stat"><div class="label">Fiyat</div><div id="sPrice" class="value">–</div><div id="sPriceAt" class="sub"></div></div>
+      <div class="card stat"><div class="label">Sinyal</div><div id="sSignal" class="value">–</div><div id="sSma" class="sub"></div></div>
+      <div class="card stat"><div class="label">Pozisyon</div><div id="sPos" class="value">–</div><div id="sPosSub" class="sub"></div></div>
+      <div class="card stat"><div class="label">Gerçekleşen K/Z</div><div id="sPnl" class="value">–</div><div class="sub">komisyon hariç</div></div>
+      <div class="card stat"><div class="label">Bugünkü işlem</div><div id="sTrades" class="value">–</div><div id="sRisk" class="sub"></div></div>
+    </div>
+
+    <section class="card section">
+      <h2 id="chartTitle">Grafik</h2>
+      <div id="chart"></div>
+      <div class="legend">
+        <span><i style="background:var(--text)"></i>Kapanış</span>
+        <span><i style="background:var(--line-fast)"></i><span id="lgFast">Hızlı SMA</span></span>
+        <span><i style="background:var(--line-slow)"></i><span id="lgSlow">Yavaş SMA</span></span>
+        <span><i style="background:var(--accent)"></i>Giriş fiyatı</span>
+      </div>
+    </section>
+
+    <div class="two">
+      <section class="card section">
+        <h2>Bakiyeler</h2>
+        <div id="balances" class="table-wrap"><span class="muted">Yükleniyor…</span></div>
+      </section>
+      <section class="card section">
+        <h2>Açık emirler</h2>
+        <div id="orders" class="table-wrap"><span class="muted">Yükleniyor…</span></div>
+      </section>
+    </div>
+
+    <section class="card section">
+      <h2>İşlem geçmişi</h2>
+      <div id="history" class="table-wrap"><span class="muted">Henüz işlem yok.</span></div>
+    </section>
+  </main>
+</div>
+<div id="toast" role="alert"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const KEY = 'botPanel.conn';
+  const REFRESH_MS = 10000;
+  let conn = null, timer = null, statusCache = null;
+
+  // ---------- depolama (erişilemezse sessizce geçer) ----------
+  const store = {
+    get() {
+      for (const s of [sessionStorage, localStorage]) {
+        try { const v = s.getItem(KEY); if (v) return JSON.parse(v); } catch {}
+      }
+      return null;
+    },
+    set(v, remember) {
+      try { sessionStorage.setItem(KEY, JSON.stringify(v)); } catch {}
+      try { remember ? localStorage.setItem(KEY, JSON.stringify(v)) : localStorage.removeItem(KEY); } catch {}
+    },
+    clear() { try { sessionStorage.removeItem(KEY); localStorage.removeItem(KEY); } catch {} },
+  };
+
+  // ---------- yardımcılar ----------
+  const nf = (d) => new Intl.NumberFormat('tr-TR', { maximumFractionDigits: d });
+  const fmt = (n, d = 2) => (n === null || n === undefined || Number.isNaN(n) ? '–' : nf(d).format(n));
+  const fmtPrice = (n) => fmt(n, n >= 100 ? 2 : n >= 1 ? 4 : 8);
+  const fmtTime = (ms) => (ms ? new Date(ms).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'medium' }) : '–');
+
+  function el(tag, attrs = {}, ...children) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) k === 'class' ? (e.className = v) : e.setAttribute(k, v);
+    for (const c of children) e.append(c instanceof Node ? c : document.createTextNode(c ?? ''));
+    return e;
+  }
+  function table(headers, rows) {
+    const t = el('table');
+    t.append(el('thead', {}, el('tr', {}, ...headers.map(([h, num]) => el('th', num ? { class: 'num' } : {}, h)))));
+    const tb = el('tbody');
+    for (const r of rows) tb.append(el('tr', {}, ...r.map((c, i) => {
+      const td = el('td', headers[i][1] ? { class: 'num' } : {});
+      if (c && typeof c === 'object' && 'text' in c) { td.textContent = c.text; if (c.cls) td.classList.add(c.cls); }
+      else td.textContent = c;
+      return td;
+    })));
+    t.append(tb);
+    return t;
+  }
+  function setText(id, text, cls) {
+    const e = $(id); e.textContent = text; e.classList.remove('up', 'down'); if (cls) e.classList.add(cls);
+  }
+  let toastTimer;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.style.display = 'none'), 5000);
+  }
+
+  async function api(path, method = 'GET') {
+    let res;
+    try {
+      res = await fetch(conn.url.replace(/\/$/, '') + path, {
+        method, headers: { authorization: 'Bearer ' + conn.token }, cache: 'no-store',
+      });
+    } catch {
+      throw new Error('Backend\'e ulaşılamadı (adres, CORS ya da sunucu kapalı olabilir)');
+    }
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401) { const e = new Error('Token geçersiz'); e.auth = true; throw e; }
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    return body;
+  }
+
+  // ---------- çizimler ----------
+  function renderStatus(s) {
+    statusCache = s;
+    const { config: c, bot: b } = s;
+    const live = c.binanceEnv === 'live';
+    const env = $('envBadge');
+    env.textContent = live ? 'CANLI' : 'TESTNET';
+    env.className = 'badge ' + (live ? 'live' : 'test');
+    $('dryBadge').classList.toggle('hidden', !c.dryRun);
+
+    setText('sRunning', b.running ? 'Çalışıyor' : 'Durdu', b.running ? 'up' : null);
+    setText('sSymbol', `${c.symbol} · ${c.interval} · her ${c.tickSeconds} sn`);
+    $('startBtn').disabled = b.running;
+    $('stopBtn').disabled = !b.running;
+
+    const lt = b.lastTick;
+    const quote = b.rules?.quoteAsset || '';
+    setText('sPrice', lt ? fmtPrice(lt.price) : '–');
+    setText('sPriceAt', lt ? 'son döngü: ' + fmtTime(lt.at) : 'henüz döngü yok');
+    const sigCls = lt?.signal === 'BUY' ? 'up' : lt?.signal === 'SELL' ? 'down' : null;
+    const sigTxt = { BUY: 'AL', SELL: 'SAT', HOLD: 'BEKLE' }[lt?.signal] || '–';
+    setText('sSignal', sigTxt, sigCls);
+    setText('sSma', lt && lt.fast ? `SMA${c.smaFast} ${fmtPrice(lt.fast)} / SMA${c.smaSlow} ${fmtPrice(lt.slow)}` : '');
+
+    const p = b.position;
+    if (p) {
+      const pct = lt ? ((lt.price - p.entryPrice) / p.entryPrice) * 100 : null;
+      const pnl = lt ? (lt.price - p.entryPrice) * p.qty : null;
+      setText('sPos', `${fmt(p.qty, 8)} ${b.rules?.baseAsset || ''}`);
+      setText('sPosSub', `giriş ${fmtPrice(p.entryPrice)} · ${pct === null ? '' : (pct >= 0 ? '+' : '') + fmt(pct) + '% · ' + fmt(pnl, 4) + ' ' + quote}`,
+        pct > 0 ? 'up' : pct < 0 ? 'down' : null);
+    } else {
+      setText('sPos', 'Yok'); setText('sPosSub', 'alım sinyali bekleniyor');
+    }
+
+    const pnl = b.realizedPnl || 0;
+    setText('sPnl', `${pnl >= 0 ? '+' : ''}${fmt(pnl, 4)} ${quote}`, pnl > 0 ? 'up' : pnl < 0 ? 'down' : null);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const trades = b.daily?.date === todayStr ? b.daily.trades : 0;
+    setText('sTrades', `${trades} / ${c.maxTradesPerDay}`);
+    setText('sRisk', `alım ${fmt(c.orderQuoteAmount)} ${quote} · SL %${c.stopLossPct} · TP %${c.takeProfitPct}`);
+
+    const errBox = $('botError');
+    errBox.classList.toggle('hidden', !b.lastError);
+    if (b.lastError) errBox.textContent = `Son hata (${fmtTime(b.lastError.at)}): ${b.lastError.message}`;
+
+    const hist = b.history || [];
+    $('history').replaceChildren(hist.length
+      ? table([['Zaman'], ['Yön'], ['Miktar', 1], ['Fiyat', 1], ['K/Z', 1], ['Neden'], ['Mod']],
+        hist.map((h) => [
+          fmtTime(h.at),
+          { text: h.side === 'BUY' ? 'ALIM' : 'SATIM', cls: h.side === 'BUY' ? 'up' : 'down' },
+          fmt(h.qty, 8), fmtPrice(h.price),
+          h.pnl === undefined ? '' : { text: fmt(h.pnl, 4), cls: h.pnl >= 0 ? 'up' : 'down' },
+          h.reason || '', h.dryRun ? 'dry-run' : 'gerçek',
+        ]))
+      : el('span', { class: 'muted' }, 'Henüz işlem yok.'));
+  }
+
+  let chartData = null;
+  function renderChart(data) {
+    chartData = data;
+    const pts = data.candles;
+    $('chartTitle').textContent = `${data.symbol} · ${data.interval}`;
+    const c = statusCache?.config;
+    if (c) { $('lgFast').textContent = 'SMA' + c.smaFast; $('lgSlow').textContent = 'SMA' + c.smaSlow; }
+    if (pts.length < 2) { $('chart').replaceChildren(el('span', { class: 'muted' }, 'Veri yok.')); return; }
+
+    const entry = statusCache?.bot?.position?.entryPrice;
+    const vals = pts.flatMap((p) => [p.c, p.fast, p.slow]).filter((v) => v !== null);
+    if (entry) vals.push(entry);
+    let min = Math.min(...vals), max = Math.max(...vals);
+    if (min === max) { min -= 1; max += 1; }
+    // Gerçek piksel genişliğinde çiz ki etiketler her ekranda okunur kalsın.
+    const W = Math.max(300, Math.round($('chart').clientWidth || 700));
+    const H = W < 560 ? 200 : 260, padL = 4, padR = 72, padY = 12;
+    const x = (i) => padL + (i / (pts.length - 1)) * (W - padL - padR);
+    const y = (v) => padY + (1 - (v - min) / (max - min)) * (H - 2 * padY);
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Fiyat grafiği');
+    const add = (tag, attrs) => {
+      const e = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+      svg.append(e); return e;
+    };
+    for (let i = 0; i <= 4; i++) {
+      const v = min + ((max - min) * i) / 4;
+      add('line', { x1: padL, x2: W - padR, y1: y(v), y2: y(v), stroke: 'var(--border)', 'stroke-width': 1 });
+      add('text', { x: W - padR + 6, y: y(v) + 4, fill: 'var(--muted)', 'font-size': 11 }).textContent = fmtPrice(v);
+    }
+    const line = (key, color, width) => {
+      const d = pts.map((p, i) => (p[key] === null ? null : `${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`)).filter(Boolean);
+      if (d.length > 1) add('polyline', { points: d.join(' '), fill: 'none', stroke: color, 'stroke-width': width, 'stroke-linejoin': 'round' });
+    };
+    if (entry) add('line', { x1: padL, x2: W - padR, y1: y(entry), y2: y(entry), stroke: 'var(--accent)', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' });
+    line('slow', 'var(--line-slow)', 1.5);
+    line('fast', 'var(--line-fast)', 1.5);
+    line('c', 'var(--text)', 2);
+    $('chart').replaceChildren(svg);
+  }
+
+  function renderBalances(r) {
+    const rows = Object.entries(r.balances).sort((a, b) => b[1].free + b[1].locked - (a[1].free + a[1].locked));
+    $('balances').replaceChildren(rows.length
+      ? table([['Varlık'], ['Serbest', 1], ['Kilitli', 1]], rows.map(([a, b]) => [a, fmt(b.free, 8), fmt(b.locked, 8)]))
+      : el('span', { class: 'muted' }, 'Bakiye yok.'));
+  }
+  function renderOrders(r) {
+    $('orders').replaceChildren(r.orders.length
+      ? table([['Sembol'], ['Yön'], ['Tür'], ['Fiyat', 1], ['Miktar', 1]],
+        r.orders.map((o) => [o.symbol, { text: o.side, cls: o.side === 'BUY' ? 'up' : 'down' }, o.type, fmtPrice(Number(o.price)), fmt(Number(o.origQty), 8)]))
+      : el('span', { class: 'muted' }, 'Açık emir yok.'));
+  }
+  const sectionError = (id) => (e) => $(id).replaceChildren(el('span', { class: 'muted' }, e.message));
+
+  // ---------- yenileme ----------
+  let tickCount = 0;
+  async function refresh() {
+    try {
+      renderStatus(await api('/api/status'));
+      $('connDot').className = 'dot ok';
+      $('updated').textContent = 'güncellendi: ' + new Date().toLocaleTimeString('tr-TR');
+    } catch (e) {
+      $('connDot').className = 'dot err';
+      if (e.auth) return disconnect('Token geçersiz, tekrar bağlanın.');
+      $('updated').textContent = e.message;
+      return;
+    }
+    const jobs = [
+      api('/api/orders/open').then(renderOrders, sectionError('orders')),
+    ];
+    if (statusCache.config.hasApiKey) jobs.push(api('/api/balance').then(renderBalances, sectionError('balances')));
+    else $('balances').replaceChildren(el('span', { class: 'muted' }, 'API anahtarı tanımlı değil.'));
+    if (tickCount++ % 3 === 0) jobs.push(api('/api/klines').then(renderChart, sectionError('chart')));
+    await Promise.all(jobs);
+  }
+
+  function schedule() {
+    clearInterval(timer);
+    timer = setInterval(() => { if (!document.hidden) refresh(); }, REFRESH_MS);
+  }
+
+  async function connect(c, remember) {
+    conn = c;
+    try {
+      await api('/api/status');
+    } catch (e) {
+      conn = null;
+      toast(e.message);
+      return false;
+    }
+    if (remember !== undefined) store.set(c, remember);
+    $('toast').style.display = 'none';
+    $('connect').classList.add('hidden');
+    $('dash').classList.remove('hidden');
+    ['settingsBtn', 'envBadge'].forEach((id) => $(id).classList.remove('hidden'));
+    tickCount = 0;
+    await refresh();
+    schedule();
+    return true;
+  }
+
+  function disconnect(msg) {
+    clearInterval(timer);
+    conn = null;
+    store.clear();
+    $('dash').classList.add('hidden');
+    $('connect').classList.remove('hidden');
+    ['settingsBtn', 'envBadge', 'dryBadge'].forEach((id) => $(id).classList.add('hidden'));
+    $('connDot').className = 'dot';
+    if (msg) toast(msg);
+  }
+
+  async function action(path, btn, confirmMsg) {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    btn.disabled = true;
+    try { await api(path, 'POST'); } catch (e) { toast(e.message); }
+    tickCount = 0;
+    await refresh();
+    btn.disabled = false;
+    if (statusCache) renderStatus(statusCache);
+  }
+
+  // ---------- olaylar ----------
+  $('connectForm').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    connect({ url: $('url').value.trim(), token: $('token').value.trim() }, $('remember').checked);
+  });
+  $('settingsBtn').addEventListener('click', () => {
+    if (confirm('Bağlantı kesilsin ve kayıtlı token silinsin mi?')) disconnect();
+  });
+  $('startBtn').addEventListener('click', (ev) => {
+    const c = statusCache?.config;
+    const live = c && c.binanceEnv === 'live' && !c.dryRun;
+    action('/api/bot/start', ev.currentTarget, live ? 'CANLI mod: bot gerçek parayla emir verecek. Başlatılsın mı?' : null);
+  });
+  $('stopBtn').addEventListener('click', (ev) => action('/api/bot/stop', ev.currentTarget));
+  $('tickBtn').addEventListener('click', (ev) => action('/api/bot/tick', ev.currentTarget));
+  let resizeT;
+  window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => chartData && renderChart(chartData), 150); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && conn) refresh(); });
+
+  const saved = store.get();
+  if (saved) { $('url').value = saved.url; connect(saved); }
+})();
+</script>
+</body>
+</html>
