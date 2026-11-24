@@ -16,8 +16,9 @@ const today = (ms) => new Date(ms).toISOString().slice(0, 10);
  *  - Evrenden düşen bir coinde açık pozisyon varsa, kapanana kadar yönetilmeye devam eder.
  */
 export class TradingBot {
-  constructor({ client, config, store, notify = async () => {}, logger, now = () => Date.now() }) {
+  constructor({ client, config, store, notify = async () => {}, logger, now = () => Date.now(), evaluate = evaluateAt }) {
     this.client = client;
+    this.evaluate = evaluate; // testlerde sinyal üretimini değiştirmek için
     this.cfg = config;
     this.store = store;
     this.notify = notify;
@@ -161,7 +162,7 @@ export class TradingBot {
       const closed = klines.filter((k) => k.closeTime < now);
       if (closed.length < MIN_CANDLES) throw new Error(`yetersiz geçmiş veri (${closed.length} mum)`);
       const series = computeSeries(closed);
-      const ev = evaluateAt(series, closed.length - 1, this.cfg);
+      const ev = this.evaluate(series, closed.length - 1, this.cfg, symbol);
       const last = closed.at(-1);
       a = {
         ...ev,

@@ -20,6 +20,7 @@ export function runBacktest(dataBySymbol, opts) {
     maxTradesPerDay = Infinity, feePct = 0.1, slippagePct = 0.05,
     buyScore = 3, sellScore = -2, requireTrend = true,
     tradeFrom = -Infinity, // bu zamandan önceki mumlar sadece göstergeleri ısıtmak için kullanılır
+    evaluate = evaluateAt, // testlerde sinyal üretimini değiştirmek için
   } = opts;
   const fee = feePct / 100;
   const slip = slippagePct / 100;
@@ -93,7 +94,7 @@ export function runBacktest(dataBySymbol, opts) {
       else if (pos?.tpPrice && k.high >= pos.tpPrice) close(s, Math.max(k.open, pos.tpPrice), k.openTime, 'kâr al');
 
       // 3) Mum kapanışında analiz
-      const ev = evaluateAt(series[s], i, { buyScore, sellScore, requireTrend });
+      const ev = evaluate(series[s], i, { buyScore, sellScore, requireTrend }, s);
       if (ev.signal !== 'HOLD') pending[s] = ev.signal;
     }
     if (!live) continue;

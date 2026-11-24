@@ -9,19 +9,21 @@
   :root {
     --bg: #f5f6f8; --surface: #ffffff; --border: #e2e5ea; --text: #1b1f24; --muted: #667080;
     --accent: #c99400; --up: #0f9d58; --down: #d93025; --warn-bg: #fff4d6; --warn-text: #7a5700;
-    --live-bg: #fde7e7; --live-text: #a1150b; --line-fast: #2f6fdb; --line-slow: #b04fd1;
+    --live-bg: #fde7e7; --live-text: #a1150b; --line-fast: #2f6fdb; --line-slow: #b04fd1; --line-trend: #e07b00;
+    --band: rgba(47, 111, 219, .08); --sel: #eef3ff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0f1216; --surface: #181c22; --border: #2a3039; --text: #e7eaee; --muted: #8b95a3;
       --accent: #f0b90b; --up: #2ebd85; --down: #f6465d; --warn-bg: #3a2f0e; --warn-text: #f3d27a;
-      --live-bg: #3d1518; --live-text: #ff8a8a; --line-fast: #6ea2ff; --line-slow: #d48bf0;
+      --live-bg: #3d1518; --live-text: #ff8a8a; --line-fast: #6ea2ff; --line-slow: #d48bf0; --line-trend: #ffa94d;
+      --band: rgba(110, 162, 255, .10); --sel: #1f2733;
     }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
   header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
   h1 { font-size: 20px; margin: 0; display: flex; align-items: center; gap: 10px; white-space: nowrap; }
   h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
@@ -32,7 +34,7 @@
   .stat .label { color: var(--muted); font-size: 13px; }
   .stat .value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; overflow-wrap: anywhere; }
   .stat .sub { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .up { color: var(--up); } .down { color: var(--down); }
+  .up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); font-size: 13px; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .section { margin-bottom: 12px; }
   .two { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
@@ -52,12 +54,17 @@
   .badge.live { background: var(--live-bg); color: var(--live-text); }
   .badge.dry { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
   .note { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
-  .muted { color: var(--muted); font-size: 13px; }
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
-  td.num, th.num { text-align: right; }
+  td.num, th.num { text-align: right; } td.c, th.c { text-align: center; }
+  #scan tbody tr { cursor: pointer; }
+  #scan tbody tr:hover, #scan tbody tr.sel { background: var(--sel); }
+  .vote { font-size: 13px; font-weight: 700; }
+  .pill { display: inline-block; min-width: 46px; text-align: center; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+    border: 1px solid var(--border); }
+  .pill.buy { color: var(--up); border-color: var(--up); } .pill.sell { color: var(--down); border-color: var(--down); }
   svg { width: 100%; height: auto; display: block; }
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
   .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
@@ -77,7 +84,6 @@
     </div>
   </header>
 
-  <!-- Bağlantı ayarları -->
   <section id="connect" class="card section">
     <h2>Backend'e bağlan</h2>
     <form id="connectForm">
@@ -102,6 +108,7 @@
           <button id="startBtn" class="primary">Başlat</button>
           <button id="stopBtn" class="danger">Durdur</button>
           <button id="tickBtn">Şimdi çalıştır</button>
+          <button id="universeBtn">Coin listesini yenile</button>
         </div>
         <span id="updated" class="muted"></span>
       </div>
@@ -109,23 +116,35 @@
     </section>
 
     <div class="grid">
-      <div class="card stat"><div class="label">Bot</div><div id="sRunning" class="value">–</div><div id="sSymbol" class="sub"></div></div>
-      <div class="card stat"><div class="label">Fiyat</div><div id="sPrice" class="value">–</div><div id="sPriceAt" class="sub"></div></div>
-      <div class="card stat"><div class="label">Sinyal</div><div id="sSignal" class="value">–</div><div id="sSma" class="sub"></div></div>
-      <div class="card stat"><div class="label">Pozisyon</div><div id="sPos" class="value">–</div><div id="sPosSub" class="sub"></div></div>
+      <div class="card stat"><div class="label">Bot</div><div id="sRunning" class="value">–</div><div id="sMode" class="sub"></div></div>
+      <div class="card stat"><div class="label">Açık pozisyon</div><div id="sOpen" class="value">–</div><div id="sOpenSub" class="sub"></div></div>
+      <div class="card stat"><div class="label">Açık K/Z</div><div id="sUnreal" class="value">–</div><div class="sub">anlık fiyatlarla</div></div>
       <div class="card stat"><div class="label">Gerçekleşen K/Z</div><div id="sPnl" class="value">–</div><div class="sub">komisyon hariç</div></div>
       <div class="card stat"><div class="label">Bugünkü işlem</div><div id="sTrades" class="value">–</div><div id="sRisk" class="sub"></div></div>
     </div>
+
+    <section class="card section">
+      <h2>Piyasa taraması</h2>
+      <div id="scan" class="table-wrap"><span class="muted">Henüz analiz yok. "Şimdi çalıştır" ile ilk taramayı başlatın.</span></div>
+      <div id="scanNote" class="muted" style="margin-top:8px"></div>
+    </section>
 
     <section class="card section">
       <h2 id="chartTitle">Grafik</h2>
       <div id="chart"></div>
       <div class="legend">
         <span><i style="background:var(--text)"></i>Kapanış</span>
-        <span><i style="background:var(--line-fast)"></i><span id="lgFast">Hızlı SMA</span></span>
-        <span><i style="background:var(--line-slow)"></i><span id="lgSlow">Yavaş SMA</span></span>
+        <span><i style="background:var(--line-fast)"></i>EMA20</span>
+        <span><i style="background:var(--line-slow)"></i>EMA50</span>
+        <span><i style="background:var(--line-trend)"></i>EMA200</span>
+        <span><i style="background:var(--band);height:8px"></i>Bollinger</span>
         <span><i style="background:var(--accent)"></i>Giriş fiyatı</span>
       </div>
+    </section>
+
+    <section class="card section">
+      <h2>Açık pozisyonlar</h2>
+      <div id="positions" class="table-wrap"><span class="muted">Açık pozisyon yok.</span></div>
     </section>
 
     <div class="two">
@@ -152,7 +171,7 @@
   const $ = (id) => document.getElementById(id);
   const KEY = 'botPanel.conn';
   const REFRESH_MS = 10000;
-  let conn = null, timer = null, statusCache = null;
+  let conn = null, timer = null, statusCache = null, selected = null, chartData = null, tickCount = 0;
 
   // ---------- depolama (erişilemezse sessizce geçer) ----------
   const store = {
@@ -172,30 +191,41 @@
   // ---------- yardımcılar ----------
   const nf = (d) => new Intl.NumberFormat('tr-TR', { maximumFractionDigits: d });
   const fmt = (n, d = 2) => (n === null || n === undefined || Number.isNaN(n) ? '–' : nf(d).format(n));
-  const fmtPrice = (n) => fmt(n, n >= 100 ? 2 : n >= 1 ? 4 : 8);
-  const fmtTime = (ms) => (ms ? new Date(ms).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'medium' }) : '–');
+  const fmtPrice = (n) => (n == null ? '–' : fmt(n, n >= 100 ? 2 : n >= 1 ? 4 : n >= 0.01 ? 6 : 10));
+  const fmtSigned = (n, d = 2) => (n > 0 ? '+' : '') + fmt(n, d);
+  const fmtTime = (ms) => (ms ? new Date(ms).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' }) : '–');
+  const coin = (s) => s.replace(/(USDT|USDC|FDUSD)$/, '');
+  const cls = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : null);
 
   function el(tag, attrs = {}, ...children) {
     const e = document.createElement(tag);
-    for (const [k, v] of Object.entries(attrs)) k === 'class' ? (e.className = v) : e.setAttribute(k, v);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === undefined) continue;
+      k === 'class' ? (e.className = v) : e.setAttribute(k, v);
+    }
     for (const c of children) e.append(c instanceof Node ? c : document.createTextNode(c ?? ''));
     return e;
   }
-  function table(headers, rows) {
+  // headers: [[başlık, hizalama('num'|'c'|undefined)]]; hücre: metin | {text, cls, title} | Node
+  function table(headers, rows, rowAttrs) {
     const t = el('table');
-    t.append(el('thead', {}, el('tr', {}, ...headers.map(([h, num]) => el('th', num ? { class: 'num' } : {}, h)))));
+    t.append(el('thead', {}, el('tr', {}, ...headers.map(([h, a]) => el('th', { class: a }, h)))));
     const tb = el('tbody');
-    for (const r of rows) tb.append(el('tr', {}, ...r.map((c, i) => {
-      const td = el('td', headers[i][1] ? { class: 'num' } : {});
-      if (c && typeof c === 'object' && 'text' in c) { td.textContent = c.text; if (c.cls) td.classList.add(c.cls); }
-      else td.textContent = c;
+    rows.forEach((r, ri) => tb.append(el('tr', rowAttrs ? rowAttrs(ri) : {}, ...r.map((c, i) => {
+      const td = el('td', { class: headers[i][1] });
+      if (c instanceof Node) td.append(c);
+      else if (c && typeof c === 'object') {
+        td.textContent = c.text;
+        if (c.cls) td.classList.add(c.cls);
+        if (c.title) td.title = c.title;
+      } else td.textContent = c ?? '';
       return td;
-    })));
+    }))));
     t.append(tb);
     return t;
   }
-  function setText(id, text, cls) {
-    const e = $(id); e.textContent = text; e.classList.remove('up', 'down'); if (cls) e.classList.add(cls);
+  function setText(id, text, c) {
+    const e = $(id); e.textContent = text; e.classList.remove('up', 'down'); if (c) e.classList.add(c);
   }
   let toastTimer;
   function toast(msg) {
@@ -218,10 +248,11 @@
     return body;
   }
 
-  // ---------- çizimler ----------
+  // ---------- durum ----------
   function renderStatus(s) {
     statusCache = s;
     const { config: c, bot: b } = s;
+    const q = b.quoteAsset || c.quoteAsset || '';
     const live = c.binanceEnv === 'live';
     const env = $('envBadge');
     env.textContent = live ? 'CANLI' : 'TESTNET';
@@ -229,115 +260,195 @@
     $('dryBadge').classList.toggle('hidden', !c.dryRun);
 
     setText('sRunning', b.running ? 'Çalışıyor' : 'Durdu', b.running ? 'up' : null);
-    setText('sSymbol', `${c.symbol} · ${c.interval} · her ${c.tickSeconds} sn`);
+    setText('sMode', `${c.interval} mum · her ${c.tickSeconds} sn`);
     $('startBtn').disabled = b.running;
     $('stopBtn').disabled = !b.running;
 
-    const lt = b.lastTick;
-    const quote = b.rules?.quoteAsset || '';
-    setText('sPrice', lt ? fmtPrice(lt.price) : '–');
-    setText('sPriceAt', lt ? 'son döngü: ' + fmtTime(lt.at) : 'henüz döngü yok');
-    const sigCls = lt?.signal === 'BUY' ? 'up' : lt?.signal === 'SELL' ? 'down' : null;
-    const sigTxt = { BUY: 'AL', SELL: 'SAT', HOLD: 'BEKLE' }[lt?.signal] || '–';
-    setText('sSignal', sigTxt, sigCls);
-    setText('sSma', lt && lt.fast ? `SMA${c.smaFast} ${fmtPrice(lt.fast)} / SMA${c.smaSlow} ${fmtPrice(lt.slow)}` : '');
-
-    const p = b.position;
-    if (p) {
-      const pct = lt ? ((lt.price - p.entryPrice) / p.entryPrice) * 100 : null;
-      const pnl = lt ? (lt.price - p.entryPrice) * p.qty : null;
-      setText('sPos', `${fmt(p.qty, 8)} ${b.rules?.baseAsset || ''}`);
-      setText('sPosSub', `giriş ${fmtPrice(p.entryPrice)} · ${pct === null ? '' : (pct >= 0 ? '+' : '') + fmt(pct) + '% · ' + fmt(pnl, 4) + ' ' + quote}`,
-        pct > 0 ? 'up' : pct < 0 ? 'down' : null);
-    } else {
-      setText('sPos', 'Yok'); setText('sPosSub', 'alım sinyali bekleniyor');
+    const positions = Object.entries(b.positions || {});
+    let unreal = 0, cost = 0;
+    for (const [sym, p] of positions) {
+      const price = b.analysis?.[sym]?.price;
+      if (price) unreal += (price - p.entryPrice) * p.qty;
+      cost += p.entryPrice * p.qty;
     }
-
+    setText('sOpen', `${positions.length} / ${c.maxOpenPositions}`);
+    setText('sOpenSub', `${fmt(cost)} ${q} pozisyonda`);
+    setText('sUnreal', positions.length ? `${fmtSigned(unreal, 4)} ${q}` : '–', cls(unreal));
     const pnl = b.realizedPnl || 0;
-    setText('sPnl', `${pnl >= 0 ? '+' : ''}${fmt(pnl, 4)} ${quote}`, pnl > 0 ? 'up' : pnl < 0 ? 'down' : null);
+    setText('sPnl', `${fmtSigned(pnl, 4)} ${q}`, cls(pnl));
     const todayStr = new Date().toISOString().slice(0, 10);
-    const trades = b.daily?.date === todayStr ? b.daily.trades : 0;
-    setText('sTrades', `${trades} / ${c.maxTradesPerDay}`);
-    setText('sRisk', `alım ${fmt(c.orderQuoteAmount)} ${quote} · SL %${c.stopLossPct} · TP %${c.takeProfitPct}`);
+    setText('sTrades', `${b.daily?.date === todayStr ? b.daily.trades : 0} / ${c.maxTradesPerDay}`);
+    setText('sRisk', `pozisyon ${fmt(c.orderQuoteAmount)} ${q} · SL ${c.stopLossPct ? '%' + c.stopLossPct : 'yok'} · TP ${c.takeProfitPct ? '%' + c.takeProfitPct : 'yok'}`);
 
     const errBox = $('botError');
     errBox.classList.toggle('hidden', !b.lastError);
     if (b.lastError) errBox.textContent = `Son hata (${fmtTime(b.lastError.at)}): ${b.lastError.message}`;
 
-    const hist = b.history || [];
+    renderScan(b, c);
+    renderPositions(positions, b, q);
+    renderHistory(b.history || []);
+  }
+
+  function voteCell(m) {
+    if (!m) return { text: '–' };
+    const [text, c] = m.vote > 0 ? ['▲', 'up'] : m.vote < 0 ? ['▼', 'down'] : ['●', null];
+    return el('span', { class: 'vote' + (c ? ' ' + c : ''), title: `${m.name}: ${m.detail}` }, text);
+  }
+
+  function renderScan(b, c) {
+    const u = b.universe || { symbols: [] };
+    const symbols = [...new Set([...u.symbols, ...Object.keys(b.positions || {})])];
+    if (!symbols.length) return;
+    if (!selected || !symbols.includes(selected)) selected = symbols[0];
+    const keys = ['trend', 'ema', 'macd', 'rsi', 'bb'];
+    const rows = symbols.map((sym) => {
+      const a = b.analysis?.[sym];
+      const err = b.symbolErrors?.[sym];
+      const methods = Object.fromEntries((a?.methods || []).map((m) => [m.key, m]));
+      const pos = b.positions?.[sym];
+      // SAT sinyali sadece pozisyon varken bir eylemdir; pozisyon yoksa "zayıf" görünüm demektir.
+      const label = { BUY: 'AL', SELL: pos ? 'SAT' : 'ZAYIF', HOLD: 'BEKLE' }[a?.signal] || '–';
+      const tip = a ? `Skor ${a.score} · analiz: ${fmtTime(a.analyzedAt)}${a.signal === 'SELL' && !pos ? ' · satış yönlü; pozisyon olmadığı için işlem yok' : ''}` : '';
+      const sig = err ? { text: 'hata', cls: 'down', title: err.message }
+        : el('span', { class: 'pill ' + ({ BUY: 'buy', SELL: 'sell' }[a?.signal] || ''), title: tip }, label);
+      let posCell = '';
+      if (pos && a?.price) {
+        const pct = ((a.price - pos.entryPrice) / pos.entryPrice) * 100;
+        posCell = { text: `${fmtSigned(pct)}%`, cls: cls(pct) };
+      } else if (pos) posCell = 'açık';
+      const inList = u.symbols.includes(sym);
+      return [
+        { text: coin(sym) + (inList ? '' : ' *'), title: inList ? sym : `${sym}: listeden çıktı, pozisyon kapanana kadar izleniyor` },
+        fmtPrice(a?.price),
+        ...keys.map((k) => voteCell(methods[k])),
+        a?.ready ? { text: fmtSigned(a.score, 0), cls: cls(a.score) } : '–',
+        sig,
+        posCell,
+      ];
+    });
+    $('scan').replaceChildren(table(
+      [['Coin'], ['Fiyat', 'num'], ['Trend', 'c'], ['EMA', 'c'], ['MACD', 'c'], ['RSI', 'c'], ['Boll.', 'c'], ['Skor', 'num'], ['Sinyal', 'c'], ['Pozisyon', 'num']],
+      rows,
+      (i) => ({ class: symbols[i] === selected ? 'sel' : null, 'data-sym': symbols[i] }),
+    ));
+    const skipped = (u.skipped || []).map((x) => `${coin(x.symbol)} (${x.reason})`).join(', ');
+    $('scanNote').textContent =
+      `Alım: skor ≥ ${c.buyScore}${c.requireTrend ? ' ve fiyat EMA200 üstünde' : ''} · Satış: skor ≤ ${c.sellScore}. ` +
+      'Simgelerin üzerine gelince ayrıntı görünür; satıra tıklayınca grafik değişir. ' +
+      (c.symbols?.length ? 'Coin listesi sabit (SYMBOLS).' : `Liste hacme göre ilk ${c.topN} · güncelleme: ${fmtTime(u.updatedAt)}.`) +
+      (skipped ? ` Elenen: ${skipped}.` : '');
+  }
+
+  function renderPositions(positions, b, q) {
+    $('positions').replaceChildren(positions.length
+      ? table([['Coin'], ['Miktar', 'num'], ['Giriş', 'num'], ['Şimdi', 'num'], [`K/Z (${q})`, 'num'], ['K/Z %', 'num'], ['Açılış']],
+        positions.map(([sym, p]) => {
+          const price = b.analysis?.[sym]?.price;
+          const pnl = price ? (price - p.entryPrice) * p.qty : null;
+          const pct = price ? ((price - p.entryPrice) / p.entryPrice) * 100 : null;
+          return [coin(sym), fmt(p.qty, 8), fmtPrice(p.entryPrice), fmtPrice(price),
+            { text: pnl === null ? '–' : fmtSigned(pnl, 4), cls: cls(pnl) },
+            { text: pct === null ? '–' : fmtSigned(pct) + '%', cls: cls(pct) }, fmtTime(p.openedAt)];
+        }))
+      : el('span', { class: 'muted' }, 'Açık pozisyon yok.'));
+  }
+
+  function renderHistory(hist) {
     $('history').replaceChildren(hist.length
-      ? table([['Zaman'], ['Yön'], ['Miktar', 1], ['Fiyat', 1], ['K/Z', 1], ['Neden'], ['Mod']],
+      ? table([['Zaman'], ['Coin'], ['Yön'], ['Miktar', 'num'], ['Fiyat', 'num'], ['K/Z', 'num'], ['Neden'], ['Mod']],
         hist.map((h) => [
-          fmtTime(h.at),
+          fmtTime(h.at), coin(h.symbol || ''),
           { text: h.side === 'BUY' ? 'ALIM' : 'SATIM', cls: h.side === 'BUY' ? 'up' : 'down' },
           fmt(h.qty, 8), fmtPrice(h.price),
-          h.pnl === undefined ? '' : { text: fmt(h.pnl, 4), cls: h.pnl >= 0 ? 'up' : 'down' },
+          h.pnl === undefined ? '' : { text: fmtSigned(h.pnl, 4), cls: cls(h.pnl) },
           h.reason || '', h.dryRun ? 'dry-run' : 'gerçek',
         ]))
       : el('span', { class: 'muted' }, 'Henüz işlem yok.'));
   }
 
-  let chartData = null;
+  // ---------- grafik ----------
   function renderChart(data) {
     chartData = data;
     const pts = data.candles;
-    $('chartTitle').textContent = `${data.symbol} · ${data.interval}`;
-    const c = statusCache?.config;
-    if (c) { $('lgFast').textContent = 'SMA' + c.smaFast; $('lgSlow').textContent = 'SMA' + c.smaSlow; }
+    $('chartTitle').textContent = `${coin(data.symbol)} · ${data.interval}`;
     if (pts.length < 2) { $('chart').replaceChildren(el('span', { class: 'muted' }, 'Veri yok.')); return; }
 
-    const entry = statusCache?.bot?.position?.entryPrice;
-    const vals = pts.flatMap((p) => [p.c, p.fast, p.slow]).filter((v) => v !== null);
+    const entry = statusCache?.bot?.positions?.[data.symbol]?.entryPrice;
+    const vals = pts.flatMap((p) => [p.c, p.emaFast, p.emaSlow, p.ema200, p.bbU, p.bbL]).filter((v) => v != null);
     if (entry) vals.push(entry);
     let min = Math.min(...vals), max = Math.max(...vals);
-    if (min === max) { min -= 1; max += 1; }
+    if (min === max) { min *= 0.99; max *= 1.01; }
+
     // Gerçek piksel genişliğinde çiz ki etiketler her ekranda okunur kalsın.
     const W = Math.max(300, Math.round($('chart').clientWidth || 700));
-    const H = W < 560 ? 200 : 260, padL = 4, padR = 72, padY = 12;
+    const H = W < 560 ? 200 : 260, RH = 70, GAP = 14, padL = 4, padR = 76, padY = 10;
     const x = (i) => padL + (i / (pts.length - 1)) * (W - padL - padR);
     const y = (v) => padY + (1 - (v - min) / (max - min)) * (H - 2 * padY);
+    const ry = (v) => H + GAP + (1 - v / 100) * RH;
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(NS, 'svg');
-    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H + GAP + RH + 4}`);
     svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', 'Fiyat grafiği');
-    const add = (tag, attrs) => {
+    svg.setAttribute('aria-label', `${data.symbol} fiyat grafiği, EMA, Bollinger ve RSI`);
+    const add = (tag, attrs, text) => {
       const e = document.createElementNS(NS, tag);
       for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-      svg.append(e); return e;
+      if (text !== undefined) e.textContent = text;
+      svg.append(e);
+      return e;
     };
+    const path = (key, fn = y) => pts.map((p, i) => (p[key] == null ? null : `${x(i).toFixed(1)},${fn(p[key]).toFixed(1)}`)).filter(Boolean);
+
     for (let i = 0; i <= 4; i++) {
       const v = min + ((max - min) * i) / 4;
       add('line', { x1: padL, x2: W - padR, y1: y(v), y2: y(v), stroke: 'var(--border)', 'stroke-width': 1 });
-      add('text', { x: W - padR + 6, y: y(v) + 4, fill: 'var(--muted)', 'font-size': 11 }).textContent = fmtPrice(v);
+      add('text', { x: W - padR + 6, y: y(v) + 4, fill: 'var(--muted)', 'font-size': 11 }, fmtPrice(v));
     }
+    const up = path('bbU'), lo = path('bbL');
+    if (up.length > 1) add('polygon', { points: [...up, ...lo.reverse()].join(' '), fill: 'var(--band)', stroke: 'none' });
     const line = (key, color, width) => {
-      const d = pts.map((p, i) => (p[key] === null ? null : `${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`)).filter(Boolean);
+      const d = path(key);
       if (d.length > 1) add('polyline', { points: d.join(' '), fill: 'none', stroke: color, 'stroke-width': width, 'stroke-linejoin': 'round' });
     };
     if (entry) add('line', { x1: padL, x2: W - padR, y1: y(entry), y2: y(entry), stroke: 'var(--accent)', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' });
-    line('slow', 'var(--line-slow)', 1.5);
-    line('fast', 'var(--line-fast)', 1.5);
+    line('ema200', 'var(--line-trend)', 1.5);
+    line('emaSlow', 'var(--line-slow)', 1.5);
+    line('emaFast', 'var(--line-fast)', 1.5);
     line('c', 'var(--text)', 2);
+
+    // RSI alt paneli
+    add('rect', { x: padL, y: H + GAP, width: W - padL - padR, height: RH, fill: 'none', stroke: 'var(--border)' });
+    for (const v of [30, 70]) {
+      add('line', { x1: padL, x2: W - padR, y1: ry(v), y2: ry(v), stroke: 'var(--border)', 'stroke-dasharray': '3 3' });
+      add('text', { x: W - padR + 6, y: ry(v) + 4, fill: 'var(--muted)', 'font-size': 11 }, String(v));
+    }
+    const rsi = path('rsi', ry);
+    if (rsi.length > 1) add('polyline', { points: rsi.join(' '), fill: 'none', stroke: 'var(--line-slow)', 'stroke-width': 1.5 });
+    const lastRsi = pts.at(-1).rsi;
+    add('text', { x: padL + 6, y: H + GAP + 14, fill: 'var(--muted)', 'font-size': 11 }, `RSI ${lastRsi == null ? '' : fmt(lastRsi, 1)}`);
     $('chart').replaceChildren(svg);
   }
 
+  // ---------- bakiyeler, emirler ----------
   function renderBalances(r) {
     const rows = Object.entries(r.balances).sort((a, b) => b[1].free + b[1].locked - (a[1].free + a[1].locked));
     $('balances').replaceChildren(rows.length
-      ? table([['Varlık'], ['Serbest', 1], ['Kilitli', 1]], rows.map(([a, b]) => [a, fmt(b.free, 8), fmt(b.locked, 8)]))
+      ? table([['Varlık'], ['Serbest', 'num'], ['Kilitli', 'num']], rows.map(([a, b]) => [a, fmt(b.free, 8), fmt(b.locked, 8)]))
       : el('span', { class: 'muted' }, 'Bakiye yok.'));
   }
   function renderOrders(r) {
     $('orders').replaceChildren(r.orders.length
-      ? table([['Sembol'], ['Yön'], ['Tür'], ['Fiyat', 1], ['Miktar', 1]],
-        r.orders.map((o) => [o.symbol, { text: o.side, cls: o.side === 'BUY' ? 'up' : 'down' }, o.type, fmtPrice(Number(o.price)), fmt(Number(o.origQty), 8)]))
+      ? table([['Coin'], ['Yön'], ['Tür'], ['Fiyat', 'num'], ['Miktar', 'num']],
+        r.orders.map((o) => [coin(o.symbol), { text: o.side, cls: o.side === 'BUY' ? 'up' : 'down' }, o.type, fmtPrice(Number(o.price)), fmt(Number(o.origQty), 8)]))
       : el('span', { class: 'muted' }, 'Açık emir yok.'));
   }
   const sectionError = (id) => (e) => $(id).replaceChildren(el('span', { class: 'muted' }, e.message));
 
+  const loadChart = () => (selected
+    ? api('/api/klines?symbol=' + encodeURIComponent(selected)).then(renderChart, sectionError('chart'))
+    : Promise.resolve());
+
   // ---------- yenileme ----------
-  let tickCount = 0;
   async function refresh() {
     try {
       renderStatus(await api('/api/status'));
@@ -349,12 +460,15 @@
       $('updated').textContent = e.message;
       return;
     }
-    const jobs = [
-      api('/api/orders/open').then(renderOrders, sectionError('orders')),
-    ];
-    if (statusCache.config.hasApiKey) jobs.push(api('/api/balance').then(renderBalances, sectionError('balances')));
-    else $('balances').replaceChildren(el('span', { class: 'muted' }, 'API anahtarı tanımlı değil.'));
-    if (tickCount++ % 3 === 0) jobs.push(api('/api/klines').then(renderChart, sectionError('chart')));
+    // bakiye, emir ve grafik her 30 sn'de bir (API kullanımını düşük tutmak için)
+    if (tickCount++ % 3 !== 0) return;
+    const jobs = [loadChart()];
+    if (statusCache.config.hasApiKey) {
+      jobs.push(api('/api/balance').then(renderBalances, sectionError('balances')));
+      jobs.push(api('/api/orders/open').then(renderOrders, sectionError('orders')));
+    } else {
+      for (const id of ['balances', 'orders']) $(id).replaceChildren(el('span', { class: 'muted' }, 'API anahtarı tanımlı değil.'));
+    }
     await Promise.all(jobs);
   }
 
@@ -419,6 +533,14 @@
   });
   $('stopBtn').addEventListener('click', (ev) => action('/api/bot/stop', ev.currentTarget));
   $('tickBtn').addEventListener('click', (ev) => action('/api/bot/tick', ev.currentTarget));
+  $('universeBtn').addEventListener('click', (ev) => action('/api/universe/refresh', ev.currentTarget));
+  $('scan').addEventListener('click', (ev) => {
+    const tr = ev.target.closest('tr[data-sym]');
+    if (!tr || tr.dataset.sym === selected) return;
+    selected = tr.dataset.sym;
+    if (statusCache) renderScan(statusCache.bot, statusCache.config);
+    loadChart();
+  });
   let resizeT;
   window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => chartData && renderChart(chartData), 150); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && conn) refresh(); });

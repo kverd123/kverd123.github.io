@@ -2,8 +2,8 @@
 
 Binance **Spot** hesabınıza bağlanan küçük bir Node.js servisi. İçinde iki parça var:
 
-1. **Al-sat botu**: SMA kesişimi stratejisiyle çalışır, sadece long pozisyon açar. Zarar durdur, kâr al ve günlük işlem limiti vardır.
-2. **HTTP API**: bakiye, fiyat, açık emirler ve bot durumu için uçlar sunar. Botu başlatıp durdurmak da buradan yapılır. Tüm uçlar token ile korunur.
+1. **Al-sat botu**: Binance'te en çok işlem gören 10 coini (ya da sizin seçtiğiniz coinleri) sürekli izler. Her coinin grafiğini beş farklı teknik analiz yöntemiyle değerlendirir ve sadece alım yönlü (long) pozisyon açar. Pozisyon limiti, zarar durdur ve günlük işlem limiti vardır.
+2. **HTTP API**: bakiye, fiyat, açık emirler, coin analizleri ve bot durumu için uçlar sunar. Botu başlatıp durdurmak da buradan yapılır. Tüm uçlar token ile korunur.
 
 Harici bağımlılık yoktur. Node.js 20.12 veya üstü yeterli.
 
@@ -49,19 +49,48 @@ npm start       # API sunucusu + bot
 
 ## Strateji nasıl çalışır?
 
-Bot her `TICK_SECONDS` saniyede bir şu adımları izler:
+### Hangi coinler?
 
-1. `KLINE_INTERVAL` mumlarını çeker. Henüz kapanmamış son mum hesaba katılmaz.
-2. Hızlı SMA (`SMA_FAST`) yavaş SMA'yı (`SMA_SLOW`) **yukarı keserse** ve açık pozisyon yoksa, `ORDER_QUOTE_AMOUNT` USDT'lik market alım yapar.
-3. **Aşağı kesişimde**, ya da fiyat `STOP_LOSS_PCT` / `TAKE_PROFIT_PCT` seviyesine ulaşınca, pozisyonu market emirle satar.
-4. **Sadece kendi aldığı miktarı satar.** Hesabınızdaki diğer coinlere dokunmaz.
-5. `MAX_TRADES_PER_DAY` limiti yalnızca yeni alımları durdurur. Zarar durdur her zaman çalışır.
+`SYMBOLS` boşsa bot, USDT paritelerini son 24 saatteki işlem hacmine göre sıralar ve ilk `TOP_N` (varsayılan 10) coini seçer. Liste günde bir yenilenir. Şunlar listeye alınmaz:
+- Stablecoinler ve fiat paralar (USDC, FDUSD, USD1, EUR, TRY…). Fiyatı 1 civarında sabit duran varlıklar da otomatik elenir.
+- Sarmalanmış (wrapped) varlıklar (WBTC, WBETH…)
+- `MIN_LISTING_DAYS` (varsayılan 365) günden yeni listelenenler. Bu kural tokenize hisse ve ETF'leri (NVDAB, SOXLB gibi) ve yeni tokenları dışarıda tutar. Ayrıca göstergeler için yeterli geçmiş veri olmasını sağlar.
+- `EXCLUDE_ASSETS` ile sizin çıkardıklarınız
 
-Pozisyon ve işlem geçmişi `data/` klasörüne yazılır. Bu sayede servis yeniden başlatıldığında açık pozisyon unutulmaz.
+Coinleri kendiniz seçmek isterseniz: `SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT`
+
+### Analiz yöntemleri
+
+Her coin, `KLINE_INTERVAL` (varsayılan 4 saat) mumu kapandığında beş yöntemle değerlendirilir. Her yöntem +1 (alım yönlü), 0 (nötr) ya da −1 (satış yönlü) oy verir:
+
+| Yöntem | +1 | −1 |
+|---|---|---|
+| Trend (EMA200) | Fiyat EMA200 üstünde | Fiyat EMA200 altında |
+| EMA 20/50 | EMA20 > EMA50 | EMA20 < EMA50 |
+| MACD (12/26/9) | Histogram pozitif ve artıyor | Histogram negatif ve azalıyor |
+| RSI (14) | RSI < 30 (aşırı satım) | RSI > 70 (aşırı alım) |
+| Bollinger (20, 2) | Fiyat alt bandın altında | Fiyat üst bandın üstünde |
+
+Oyların toplamı skoru verir (−5 ile +5 arası).
+
+- **Alım:** Skor `BUY_SCORE` (varsayılan 3) veya üstünde olmalı. `REQUIRE_TREND=true` ise fiyat ayrıca EMA200 üstünde olmalı. Coinde açık pozisyon olmamalı ve açık pozisyon sayısı `MAX_OPEN_POSITIONS` altında olmalı.
+- **Satış:** Skor `SELL_SCORE` (varsayılan −2) veya altına düşerse, ya da fiyat `STOP_LOSS_PCT` / `TAKE_PROFIT_PCT` seviyesine ulaşırsa.
+
+Alım ve satım sinyalleri sadece yeni bir mum kapandığında üretilir. Zarar durdur ise her döngüde (`TICK_SECONDS`) kontrol edilir.
+
+### Risk kuralları
+
+- Her pozisyon `ORDER_QUOTE_AMOUNT` USDT'dir. Toplam en fazla `MAX_OPEN_POSITIONS × ORDER_QUOTE_AMOUNT` USDT risk alınır.
+- Aynı anda birden çok coinde alım sinyali varsa, hacmi yüksek olana öncelik verilir.
+- **Bot sadece kendi aldığı miktarı satar.** Hesabınızdaki diğer coinlere dokunmaz.
+- Listeden düşen bir coinde açık pozisyon varsa, pozisyon kapanana kadar izlenmeye devam eder. O coinde yeni alım yapılmaz.
+- `MAX_TRADES_PER_DAY` limiti yalnızca yeni alımları durdurur. Zarar durdur her zaman çalışır.
+
+Pozisyonlar, analizler ve işlem geçmişi `data/state-<ortam>-portfolio.json` dosyasına yazılır. Bu sayede servis yeniden başlatıldığında açık pozisyonlar unutulmaz. Tek coinli eski sürümden kalan bir açık pozisyon varsa, servis açılışta uyarı verir. O pozisyonu yeni bot yönetmez.
 
 `DRY_RUN=true` iken emirler simüle edilir. API anahtarı tanımlıysa emirler Binance'in `/order/test` ucuyla doğrulanır ama gerçekleşmez.
 
-> Bu basit bir örnek stratejidir ve kâr garantisi yoktur. Komisyonlar K/Z hesabına dahil değildir. Kendi stratejinizi `src/strategy.js` dosyasına yazabilirsiniz.
+> Kâr garantisi yoktur. Komisyonlar paneldeki K/Z hesabına dahil değildir. Ayarları değiştirmeden önce mutlaka geçmiş testle (aşağıda) birden çok dönemde deneyin.
 
 ## API
 
@@ -70,14 +99,15 @@ Pozisyon ve işlem geçmişi `data/` klasörüne yazılır. Bu sayede servis yen
 | Uç | Açıklama |
 |---|---|
 | `GET /health` | Servis ayakta mı |
-| `GET /api/status` | Bot durumu, pozisyon, son işlemler, ayarlar (gizli bilgiler olmadan) |
+| `GET /api/status` | Bot durumu, coin listesi, her coinin analizi, pozisyonlar, son işlemler, ayarlar (gizli bilgiler olmadan) |
 | `GET /api/price?symbol=ETHUSDT` | Anlık fiyat |
 | `GET /api/balance` | Sıfır olmayan bakiyeler |
-| `GET /api/orders/open?symbol=BTCUSDT` | Açık emirler |
-| `GET /api/klines` | Grafik için kapanış fiyatları ve SMA değerleri |
+| `GET /api/orders/open` | Açık emirler (tüm coinler; `?symbol=` ile tek coin) |
+| `GET /api/klines?symbol=ETHUSDT` | Grafik verisi: kapanış, EMA20/50/200, Bollinger bantları, RSI |
 | `POST /api/bot/start` | Botu başlat |
 | `POST /api/bot/stop` | Botu durdur |
 | `POST /api/bot/tick` | Tek bir döngüyü hemen çalıştır |
+| `POST /api/universe/refresh` | Coin listesini hemen yenile |
 
 Örnek:
 
@@ -93,25 +123,30 @@ Sunucu varsayılan olarak yalnızca `127.0.0.1` adresini dinler. İnternete açm
 Bu araç, stratejiyi canlı botla aynı kurallarla geçmiş gerçek fiyatlar üzerinde çalıştırır. API anahtarı gerekmez.
 
 ```bash
-npm run backtest                                   # .env ayarlarıyla son 90 gün
-npm run backtest -- --days 365 --interval 1h       # son 1 yıl, saatlik mumlar
-npm run backtest -- --from 2025-01-01 --to 2025-06-30 --fast 12 --slow 50 --sl 2 --tp 5
-npm run backtest -- --sweep                        # farklı SMA kombinasyonlarını karşılaştır
-npm run backtest -- --trades                       # her işlemi tek tek listele
+npm run backtest                                         # .env ayarlarıyla, bugünkü ilk 10 coin, son 1 yıl
+npm run backtest -- --from 2024-11-24 --to 2025-11-23    # başka bir dönem
+npm run backtest -- --symbols BTCUSDT,ETHUSDT,SOLUSDT    # sabit coin listesi
+npm run backtest -- --buy-score 4 --sl 5 --max-open 3    # farklı ayarlar
+npm run backtest -- --sweep                              # ayar kombinasyonlarını karşılaştır
+npm run backtest -- --trades                             # her işlemi tek tek listele
 npm run backtest -- --help
 ```
 
 Rapor şunları gösterir:
-- Toplam kâr/zarar ve aynı dönemde sadece alıp tutsaydınız ne olacağı
+- Toplam kâr/zarar ve aynı coinleri eşit bölüp alıp tutsaydınız ne olacağı
+- Coin bazında işlem sayısı, kâr/zarar ve al-tut getirisi
 - Kazanma oranı, kâr faktörü ve en büyük düşüş
 - Ödenen komisyon ve çıkış nedenleri
 
 **Gerçekçilik varsayımları:**
 - Emir, sinyalden sonraki mumun açılışında dolar.
+- Göstergeler test döneminden önceki verilerle ısıtılır. Böylece EMA200 gibi uzun göstergeler ilk günden doğru hesaplanır.
 - Varsayılan komisyon her işlemde %0,1, kayma %0,05.
 - Zarar durdur ve kâr al, mum içindeki en düşük ve en yüksek fiyata göre kontrol edilir. Fiyat seviyenin ötesinde açılırsa (boşluk), emir açılış fiyatından dolar. Aynı mumda ikisi birden tetiklenirse kötümser varsayımla zarar durdur sayılır.
 
-Veri `data-api.binance.vision` adresinden indirilir ve `data/history/` klasörüne önbelleklenir. Bu adrese erişiminiz yoksa https://data.binance.vision adresinden aylık CSV dosyalarını indirip `--csv dosya1.csv --csv dosya2.csv` ile verebilirsiniz.
+Veri `data-api.binance.vision` adresinden indirilir ve `data/history/` klasörüne önbelleklenir. Bu adrese erişiminiz yoksa https://data.binance.vision adresinden aylık CSV dosyalarını indirip `--csv BTCUSDT=dosya1.csv --csv ETHUSDT=dosya2.csv` ile verebilirsiniz.
+
+> **Hayatta kalma yanlılığı:** Coin listesi bugünkü hacme göre seçilir. Bugün ilk 10'da olan coinler, çoğu zaman yakın geçmişte çok yükseldikleri için oradadır. Bu yüzden geçmiş test sonuçları gerçekte olacağından iyimser çıkar.
 
 > **Dikkat:** `--sweep` sonucunda en iyi çıkan ayar, büyük olasılıkla o döneme "ezberlenmiştir" (aşırı uyum). Seçtiğiniz ayarı mutlaka başka bir dönemde de deneyin. Bir ayar ancak iki dönemde de iyi sonuç veriyorsa anlamlıdır. Geçmiş sonuçlar geleceği garanti etmez.
 
@@ -120,11 +155,11 @@ Veri `data-api.binance.vision` adresinden indirilir ve `data/history/` klasörü
 Site üzerinde hazır bir panel var: **https://kverd123.github.io/panel/**
 
 Panelde şunlar görünür:
-- Bot durumu, anlık fiyat ve sinyal
-- Açık pozisyon ve anlık kâr/zarar
-- Grafik (kapanış fiyatı, iki SMA çizgisi ve giriş fiyatı)
+- **Piyasa taraması:** izlenen her coin için fiyat, beş yöntemin oyu (▲ ▼ ●), toplam skor ve sinyal. Simgelerin üzerine gelince ayrıntı görünür.
+- **Grafik:** taramada tıklanan coin için kapanış fiyatı, EMA20/50/200, Bollinger bandı, giriş fiyatı ve altta RSI
+- Açık pozisyonlar ve anlık kâr/zarar, gerçekleşen kâr/zarar
 - Bakiyeler, açık emirler ve işlem geçmişi
-- Başlat / Durdur / Şimdi çalıştır düğmeleri
+- Başlat / Durdur / Şimdi çalıştır / Coin listesini yenile düğmeleri
 
 Veriler 10 saniyede bir yenilenir. Panel sizin backend'inize bağlanır; Binance'e doğrudan istek atmaz.
 
@@ -153,8 +188,11 @@ Token sayfaya gömülü değildir. Sadece sizin tarayıcınızda saklanır ve "h
 
 ```
 src/binance.js   Binance REST istemcisi (HMAC imza, saat senkronu, borsa kuralları)
-src/strategy.js  SMA kesişimi, zarar durdur / kâr al
-src/backtest.js  Geçmiş veri üzerinde simülasyon
+src/universe.js  Hacme göre ilk N coin seçimi ve filtreler
+src/indicators.js EMA, RSI, MACD, Bollinger
+src/analysis.js  Beş yöntemin oyları ve skor (bot ve backtest ortak kullanır)
+src/strategy.js  Zarar durdur / kâr al
+src/backtest.js  Geçmiş veri üzerinde çoklu coin portföy simülasyonu
 src/history.js   Geçmiş mum verisini indirme / CSV okuma
 src/bot.js       Karar döngüsü, risk kontrolleri, emir gönderme
 src/server.js    Token korumalı HTTP API
