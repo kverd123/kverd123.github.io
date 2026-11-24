@@ -247,3 +247,57 @@ test('API: CORS ön kontrolü ve grafik verisi', async () => {
     assert.ok(last.ema200 > 0 && last.bbU > last.bbL && last.rsi > 50);
   });
 });
+
+// ---- Kod incelemesi bulguları (Codex, PR #1) ----
+
+test('her işlem, döngünün geri kalanı beklenmeden hemen diske yazılır', async () => {
+  const m = mockBinance({ markets: MARKETS() });
+  const config = loadConfig({ SYMBOLS: 'BTCUSDT,ETHUSDT' });
+  const client = new BinanceClient({ baseUrl: 'https://x', fetchImpl: m.fetch });
+  const store = new JsonStore(null);
+  let saved = null;
+  store.save = () => { saved = JSON.parse(JSON.stringify(store.state)); };
+  let savedAtNotify = null;
+  const notify = async () => { savedAtNotify = saved; };
+  const bot = new TradingBot({ client, config, store, notify, logger: silentLogger, evaluate: fixedSignals({ BTCUSDT: 'BUY' }) });
+  await bot.tick();
+  assert.ok(savedAtNotify?.positions.BTCUSDT, 'bildirimden önce pozisyon kaydedilmiş olmalı');
+  assert.equal(savedAtNotify.history[0].side, 'BUY');
+});
+
+test('DRY-RUN pozisyonu gerçek modda satılmaz (ve tersi)', async () => {
+  const m = mockBinance({ markets: MARKETS(), balances: { USDT: 1000, BTC: 5 } });
+  const signals = { BTCUSDT: 'SELL' };
+  const bot = makeBot(m, { signals, env: { DRY_RUN: 'false', BINANCE_API_KEY: 'k', BINANCE_API_SECRET: 's' } });
+  bot.state.positions.BTCUSDT = { qty: 1, entryPrice: 100, cost: 100, openedAt: 0, dryRun: true };
+  const t = await bot.tick();
+  assert.deepEqual(t.actions, []);
+  assert.equal(m.orders.length, 0, 'gerçek emir gönderilmemeli');
+  assert.equal(m.balances.BTC, 5);
+  assert.ok(bot.state.positions.BTCUSDT, 'pozisyon silinmemeli');
+  assert.match(bot.symbolErrors.BTCUSDT.message, /DRY-RUN/);
+});
+
+test('satılamayan pozisyon silinmez, sonra satılır; kısmi satışta kalan izlenir', async () => {
+  const m = mockBinance({ markets: MARKETS(), balances: { USDT: 1000 } });
+  const signals = { BTCUSDT: 'BUY' };
+  const bot = makeBot(m, { signals, env: { DRY_RUN: 'false', BINANCE_API_KEY: 'k', BINANCE_API_SECRET: 's' } });
+  await bot.tick(); // 0.2 BTC alındı
+  // coin başka bir emirde kilitli: serbest bakiye 0
+  m.balances.BTC = 0;
+  signals.BTCUSDT = 'SELL';
+  nextCandle(bot);
+  assert.deepEqual((await bot.tick()).actions, []);
+  assert.equal(bot.state.positions.BTCUSDT.qty, 0.2);
+  assert.match(bot.state.positions.BTCUSDT.blocked.reason, /minimumunun altında/);
+  // kısmi serbest: 0.12 satılır, 0.08 (8 USDT ≥ min 5) izlenmeye devam eder
+  m.balances.BTC = 0.12;
+  nextCandle(bot);
+  assert.deepEqual((await bot.tick()).actions, ['SELL BTCUSDT']);
+  assert.ok(Math.abs(bot.state.positions.BTCUSDT.qty - 0.08) < 1e-12);
+  // kilit kalktı: kalan satılır, pozisyon kapanır
+  m.balances.BTC = 0.08;
+  nextCandle(bot);
+  assert.deepEqual((await bot.tick()).actions, ['SELL BTCUSDT']);
+  assert.equal(bot.state.positions.BTCUSDT, undefined);
+});

@@ -31,7 +31,9 @@ async function main() {
   }
 
   const client = new BinanceClient({ baseUrl: config.baseUrl, apiKey: config.apiKey, apiSecret: config.apiSecret });
-  const store = new JsonStore(path.join(config.dataDir, `state-${config.binanceEnv}-portfolio.json`));
+  // Simülasyon ve gerçek işlemler ayrı dosyalarda tutulur: DRY_RUN değişince pozisyonlar karışmaz.
+  const mode = config.dryRun ? 'dryrun' : 'real';
+  const store = new JsonStore(path.join(config.dataDir, `state-${config.binanceEnv}-${mode}-portfolio.json`));
   warnOldState(config, logger);
   const notify = createNotifier(config, logger);
   const bot = new TradingBot({ client, config, store, notify, logger });

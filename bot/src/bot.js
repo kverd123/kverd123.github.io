@@ -176,6 +176,10 @@ export class TradingBot {
     a.price = price;
 
     const pos = this.state.positions[symbol];
+    if (pos && Boolean(pos.dryRun) !== this.cfg.dryRun) {
+      // Simülasyon pozisyonu gerçek satışa (ya da tersi) dönüşmesin.
+      throw new Error(`pozisyon ${pos.dryRun ? 'DRY-RUN' : 'gerçek'} modda açılmış, şu anki mod farklı; işlem yapılmadı`);
+    }
     const exitReason = exitCheck(pos, price, this.cfg);
     if (pos && (exitReason || (fresh && a.signal === 'SELL'))) {
       return (await this.sell(symbol, price, exitReason || `analiz skoru ${a.score}`)) ? 'SELL' : null;
@@ -253,8 +257,10 @@ export class TradingBot {
     const qtyStr = floorToStep(qtyWanted, r.stepSize);
     const qtyNum = Number(qtyStr);
     if (qtyNum < r.minQty || qtyNum * price < r.minNotional) {
-      this.log.warn(`${symbol}: satılacak miktar borsa minimumunun altında (${qtyStr}); pozisyon kapatıldı olarak işaretlendi`);
-      delete this.state.positions[symbol];
+      // Pozisyon silinmez: bakiye kilitli olabilir ya da fiyat toparlanabilir; sonraki döngülerde tekrar denenir.
+      const msg = `satılabilir miktar (${qtyStr}) borsa minimumunun altında; pozisyon korunuyor, tekrar denenecek`;
+      if (pos.blocked?.reason !== msg) this.log.warn(`${symbol}: ${msg}`);
+      pos.blocked = { at: this.now(), reason: msg };
       return false;
     }
 
@@ -273,7 +279,15 @@ export class TradingBot {
 
     const pnl = (avg - pos.entryPrice) * qty;
     this.state.realizedPnl += pnl;
-    delete this.state.positions[symbol];
+    const remaining = Number(floorToStep(pos.qty - qty, r.stepSize));
+    if (remaining >= r.minQty && remaining * price >= r.minNotional) {
+      // Kısmi satış (ör. bakiyenin bir kısmı kilitliydi): kalan miktar izlenmeye devam eder.
+      pos.qty = remaining;
+      pos.cost = remaining * pos.entryPrice;
+      pos.blocked = { at: this.now(), reason: `kısmi satış; ${remaining} kaldı` };
+    } else {
+      delete this.state.positions[symbol];
+    }
     this.canBuyToday(); // gün değiştiyse sayacı sıfırlar
     this.record({ symbol, side: 'SELL', qty, price: avg, orderId, pnl, reason });
     await this.notify(
@@ -286,6 +300,8 @@ export class TradingBot {
     this.state.daily.trades += 1;
     this.state.history.unshift({ at: this.now(), dryRun: this.cfg.dryRun, ...trade });
     this.state.history = this.state.history.slice(0, 200);
+    // Gerçekleşen işlem, döngünün geri kalanı beklenmeden hemen diske yazılır (çökmede kaybolmasın).
+    this.store.save();
     this.log.info(
       `${trade.side} ${trade.symbol} ${trade.qty} @ ${trade.price}${trade.pnl !== undefined ? ` (K/Z ${trade.pnl.toFixed(4)})` : ''} — ${trade.reason}`,
     );

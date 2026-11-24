@@ -86,7 +86,9 @@ Alım ve satım sinyalleri sadece yeni bir mum kapandığında üretilir. Zarar 
 - Listeden düşen bir coinde açık pozisyon varsa, pozisyon kapanana kadar izlenmeye devam eder. O coinde yeni alım yapılmaz.
 - `MAX_TRADES_PER_DAY` limiti yalnızca yeni alımları durdurur. Zarar durdur her zaman çalışır.
 
-Pozisyonlar, analizler ve işlem geçmişi `data/state-<ortam>-portfolio.json` dosyasına yazılır. Bu sayede servis yeniden başlatıldığında açık pozisyonlar unutulmaz. Tek coinli eski sürümden kalan bir açık pozisyon varsa, servis açılışta uyarı verir. O pozisyonu yeni bot yönetmez.
+Pozisyonlar, analizler ve işlem geçmişi `data/state-<ortam>-<dryrun|real>-portfolio.json` dosyasına yazılır. Her alım ve satımdan hemen sonra diske kaydedilir; servis yeniden başlatıldığında açık pozisyonlar unutulmaz. Simülasyon (DRY-RUN) ve gerçek işlemler ayrı dosyalarda tutulur. Bu sayede `DRY_RUN` değiştirildiğinde simülasyon pozisyonları gerçek satışa yol açmaz.
+
+Satılmak istenen miktar borsa minimumunun altında kalırsa (örneğin coin başka bir emirde kilitliyse) pozisyon silinmez; sonraki döngülerde tekrar denenir. Kısmi satışta kalan miktar izlenmeye devam eder. Tek coinli eski sürümden kalan bir açık pozisyon varsa, servis açılışta uyarı verir. O pozisyonu yeni bot yönetmez.
 
 `DRY_RUN=true` iken emirler simüle edilir. API anahtarı tanımlıysa emirler Binance'in `/order/test` ucuyla doğrulanır ama gerçekleşmez.
 
