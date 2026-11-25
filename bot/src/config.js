@@ -55,6 +55,8 @@ export function loadConfig(env = process.env) {
     sellScore: num(env.SELL_SCORE, -2, 'SELL_SCORE'),
     requireTrend: bool(env.REQUIRE_TREND, true),
     tickSeconds: num(env.TICK_SECONDS, 60, 'TICK_SECONDS'),
+    // 0: sadece mum kapanışında analiz; N: ayrıca her N dakikada (oluşan mum anlık fiyatla)
+    analysisMinutes: num(env.ANALYSIS_MINUTES, 0, 'ANALYSIS_MINUTES'),
 
     // Risk
     orderQuoteAmount: num(env.ORDER_QUOTE_AMOUNT, 20, 'ORDER_QUOTE_AMOUNT'),
@@ -79,6 +81,9 @@ export function loadConfig(env = process.env) {
   if (cfg.buyScore < 1 || cfg.buyScore > 5) throw new Error('BUY_SCORE 1 ile 5 arasında olmalı');
   if (cfg.sellScore > 0 || cfg.sellScore < -5) throw new Error('SELL_SCORE -5 ile 0 arasında olmalı');
   if (cfg.tickSeconds < 5) throw new Error('TICK_SECONDS en az 5 olmalı');
+  if (cfg.analysisMinutes !== 0 && (cfg.analysisMinutes < 1 || cfg.analysisMinutes * 60 < cfg.tickSeconds)) {
+    throw new Error('ANALYSIS_MINUTES 0 ya da en az 1 dakika ve TICK_SECONDS süresinden uzun olmalı');
+  }
   if (cfg.orderQuoteAmount <= 0) throw new Error('ORDER_QUOTE_AMOUNT pozitif olmalı');
   if (cfg.maxOpenPositions < 1) throw new Error('MAX_OPEN_POSITIONS en az 1 olmalı');
   if (!cfg.dryRun && (!cfg.apiKey || !cfg.apiSecret)) {

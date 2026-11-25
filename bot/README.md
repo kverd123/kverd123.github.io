@@ -76,7 +76,22 @@ Oyların toplamı skoru verir (−5 ile +5 arası).
 - **Alım:** Skor `BUY_SCORE` (varsayılan 3) veya üstünde olmalı. `REQUIRE_TREND=true` ise fiyat ayrıca EMA200 üstünde olmalı. Coinde açık pozisyon olmamalı ve açık pozisyon sayısı `MAX_OPEN_POSITIONS` altında olmalı.
 - **Satış:** Skor `SELL_SCORE` (varsayılan −2) veya altına düşerse, ya da fiyat `STOP_LOSS_PCT` / `TAKE_PROFIT_PCT` seviyesine ulaşırsa.
 
-Alım ve satım sinyalleri sadece yeni bir mum kapandığında üretilir. Zarar durdur ise her döngüde (`TICK_SECONDS`) kontrol edilir.
+Zarar durdur her döngüde (`TICK_SECONDS`, varsayılan 60 saniye) kontrol edilir.
+
+Al/sat analizi `ANALYSIS_MINUTES` ayarına göre yapılır:
+- `0`: Analiz yalnızca 4 saatlik mum kapandığında yapılır.
+- `30` (`.env.example`'daki değer): Mum kapanışına ek olarak her 30 dakikada bir analiz yapılır. Bu analizde henüz kapanmamış mum, anlık fiyatla hesaba katılır. Böylece sinyale 4 saat beklemeden tepki verilir. Bunun bedeli şu: mum kapanmadan verilen bir sinyal, mum kapandığında ortadan kalkabilir. Bu da biraz daha fazla işlem demektir.
+
+Gerçek veriyle yapılan test (10 coin, 100 USDT sermaye, 3 yıl): Analiz sıklığı sonucu belirgin biçimde değiştirmedi.
+
+| Analiz sıklığı | 2025-26 | 2024-25 | 2023-24 | Toplam | İşlem sayısı |
+|---|---|---|---|---|---|
+| 4 saatte bir | +60 | +222 | +126 | +409 | 231 |
+| Saatte bir | +44 | +222 | +130 | +396 | 274 |
+| 30 dakikada bir | +41 | +221 | +154 | +416 | 286 |
+| 15 dakikada bir | +34 | +219 | +154 | +407 | 302 |
+
+Bu testi tekrarlamak için: `npm run backtest -- --analysis-minutes 30`. Bu komut 15 dakikalık geçmiş veriyi indirir.
 
 ### Risk kuralları
 

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadEnvFile, loadConfig } from './config.js';
-import { runBacktest } from './backtest.js';
+import { runBacktest, intrabarEvaluator } from './backtest.js';
 import { loadHistory, loadCsv, intervalMs, HISTORY_BASE_URL } from './history.js';
 import { BinanceClient } from './binance.js';
 import { selectUniverse } from './universe.js';
@@ -30,6 +30,9 @@ Strateji (varsayılanlar .env dosyasından):
   --amount 20         Pozisyon başına quote tutarı
   --max-trades 20     Günlük en fazla işlem
   --fee 0.1 --slippage 0.05
+  --analysis-minutes 30  Analizi mum kapanışını beklemeden her N dakikada yap (oluşan mum
+                      anlık fiyatla). 15 dakikalık veri indirilir; N 15'in katı olmalı.
+                      0 = sadece mum kapanışında (varsayılan .env'deki ANALYSIS_MINUTES)
   --direction long    long | short | both (short = vadeli işlem simülasyonu, 1x kaldıraç)
   --short-score 3     Short açmak için skor ≤ -N (ve fiyat EMA200 altında)
   --cover-score 2     Short kapatmak için skor ≥ N
@@ -52,7 +55,7 @@ function parse() {
       days: s, from: s, to: s, interval: s,
       'buy-score': s, 'sell-score': s, 'no-trend': { type: 'boolean' },
       'max-open': s, sl: s, tp: s, amount: s, 'max-trades': s, fee: s, slippage: s,
-      direction: s, 'short-score': s, 'cover-score': s, funding: s,
+      'analysis-minutes': s, direction: s, 'short-score': s, 'cover-score': s, funding: s,
       trades: { type: 'boolean' }, sweep: { type: 'boolean' }, json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -81,7 +84,7 @@ const dt = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
 function printSummary(s, o, q) {
   const line = (k, v) => console.log(`  ${k.padEnd(28)} ${v}`);
   console.log(
-    `\n=== Backtest [${o.direction}]: ${s.symbols} coin | ${o.interval} | long ≥${o.buyScore}/≤${o.sellScore}` +
+    `\n=== Backtest [${o.direction}]: ${s.symbols} coin | ${o.interval}${o.analysisMinutes ? `, analiz her ${o.analysisMinutes} dk` : ''} | long ≥${o.buyScore}/≤${o.sellScore}` +
     `${o.direction !== 'long' ? ` short ≤-${o.shortScore}/≥${o.coverScore}` : ''}${o.requireTrend ? ' + trend' : ''} | SL %${o.stopLossPct} TP %${o.takeProfitPct} ===`,
   );
   line('Dönem', `${day(s.from)} → ${day(s.to)} (${s.candles} mum)`);
@@ -176,6 +179,7 @@ async function main() {
     takeProfitPct: num(a.tp, cfg.takeProfitPct, 'tp'),
     orderQuoteAmount: num(a.amount, cfg.orderQuoteAmount, 'amount'),
     maxTradesPerDay: num(a['max-trades'], cfg.maxTradesPerDay, 'max-trades'),
+    analysisMinutes: num(a['analysis-minutes'], cfg.analysisMinutes, 'analysis-minutes'),
     direction: a.direction || 'long',
     shortScore: num(a['short-score'], 3, 'short-score'),
     coverScore: num(a['cover-score'], 2, 'cover-score'),
@@ -185,6 +189,9 @@ async function main() {
   };
 
   const step = intervalMs(o.interval);
+  const intrabar = o.analysisMinutes > 0 && o.analysisMinutes * 60e3 < step;
+  if (intrabar && (o.analysisMinutes % 15 !== 0 || a.csv)) throw new Error('--analysis-minutes 15’in katı olmalı ve --csv ile kullanılamaz');
+  const dataInterval = intrabar ? '15m' : o.interval;
   const endTime = a.to ? parseDate(a.to, 'to') + DAY : Math.floor(Date.now() / step) * step;
   const startTime = a.from ? parseDate(a.from, 'from') : endTime - num(a.days, 365, 'days') * DAY;
   if (startTime >= endTime) throw new Error('Başlangıç tarihi bitişten önce olmalı');
@@ -213,9 +220,9 @@ async function main() {
       if (u.skipped.length) log(`  (elenen: ${u.skipped.map((x) => `${x.symbol} – ${x.reason}`).join('; ')})\n`);
     }
     for (const symbol of symbols) {
-      log(`  ${symbol} ${o.interval} indiriliyor...`);
+      log(`  ${symbol} ${dataInterval} indiriliyor...`);
       data[symbol] = await loadHistory(
-        { symbol, interval: o.interval, startTime: warmStart, endTime },
+        { symbol, interval: dataInterval, startTime: warmStart, endTime },
         path.join(cfg.dataDir, 'history'),
       );
       log(` ${data[symbol].length} mum\n`);
@@ -223,9 +230,15 @@ async function main() {
   }
 
   const q = cfg.quoteAsset;
+  if (intrabar) {
+    const evals = Object.fromEntries(Object.keys(data).map((s) => [s, intrabarEvaluator(data[s], step, o.analysisMinutes)]));
+    o.evaluate = (ser, i, opts, s) => evals[s](ser, i, opts);
+    log(`  Analiz her ${o.analysisMinutes} dakikada (oluşan ${o.interval} mum dahil); emirler 15 dakikalık mumlarla simüle ediliyor.\n`);
+  }
   const result = runBacktest(data, { ...o, tradeFrom: startTime });
 
   if (a.json) {
+    delete o.evaluate;
     console.log(JSON.stringify({ options: o, summary: result.summary, trades: result.trades }, null, 2));
     return;
   }

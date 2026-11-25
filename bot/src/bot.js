@@ -154,20 +154,26 @@ export class TradingBot {
     if (!(price > 0)) throw new Error('fiyat alınamadı');
     if (!this.rules[symbol]) Object.assign(this.rules, await this.client.rulesFor([symbol]));
 
-    // Yeni mum kapandıysa yeniden analiz et; sinyaller sadece mum kapanışında üretilir.
+    // Analiz: mum kapandığında; ANALYSIS_MINUTES > 0 ise ayrıca her N dakikada bir,
+    // henüz kapanmamış mum anlık fiyatla hesaba katılarak.
     let a = this.state.analysis[symbol];
     let fresh = false;
-    if (!a || now >= a.nextCloseAt) {
+    const stepMs = this.cfg.analysisMinutes * 60e3;
+    if (!a || now >= a.nextCloseAt || (stepMs && now >= a.nextAnalysisAt)) {
       const klines = await this.client.klines(symbol, this.cfg.interval, FETCH_CANDLES + 1);
       const closed = klines.filter((k) => k.closeTime < now);
       if (closed.length < MIN_CANDLES) throw new Error(`yetersiz geçmiş veri (${closed.length} mum)`);
-      const series = computeSeries(closed);
-      const ev = this.evaluate(series, closed.length - 1, this.cfg, symbol);
+      const forming = stepMs ? klines.find((k) => k.openTime <= now && k.closeTime >= now) : null;
+      const candles = forming ? [...closed, { ...forming, close: price }] : closed;
+      const series = computeSeries(candles);
+      const ev = this.evaluate(series, candles.length - 1, this.cfg, symbol);
       const last = closed.at(-1);
       a = {
         ...ev,
         candleCloseTime: last.closeTime,
         nextCloseAt: last.closeTime + this.intervalMs,
+        nextAnalysisAt: stepMs ? Math.floor(now / stepMs) * stepMs + stepMs : null,
+        partial: Boolean(forming), // oluşmakta olan mum dahil edildi mi
         analyzedAt: now,
       };
       this.state.analysis[symbol] = a;

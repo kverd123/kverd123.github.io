@@ -1,4 +1,4 @@
-import { computeSeries, evaluateAt } from './analysis.js';
+import { computeSeries, evaluateAt, FETCH_CANDLES } from './analysis.js';
 
 /**
  * Canlı botla aynı kurallarla, birden çok coin üzerinde portföy simülasyonu.
@@ -238,5 +238,30 @@ function summarize({ trades, equity, realized, feesPaid, capital, times, barsWit
     fundingPaid: trades.reduce((a, t) => a + (t.funding || 0), 0),
     exitReasons,
     perSymbol,
+  };
+}
+
+/**
+ * Mum içi analiz simülasyonu: küçük aralıklı mumlar (ör. 15dk) üzerinde, her everyMin dakikada
+ * "kapanmış büyük mumlar (ör. 4s) + oluşmakta olan büyük mum" ile analiz yapan değerlendirici.
+ * runBacktest'e küçük mumlarla birlikte `evaluate` olarak verilir (canlı botun ANALYSIS_MINUTES davranışı).
+ */
+export function intrabarEvaluator(smallBars, bigIntervalMs, everyMin) {
+  const closedBig = [];
+  let group = null, lastClose = null;
+  const info = smallBars.map((b) => {
+    const g = Math.floor(b.openTime / bigIntervalMs);
+    if (group !== null && g !== group) closedBig.push(lastClose);
+    group = g;
+    lastClose = b.close;
+    const end = b.closeTime + 1;
+    return { nClosed: closedBig.length, partial: b.close, onStep: end % (everyMin * 60e3) === 0 || end % bigIntervalMs === 0 };
+  });
+  return (_s, i, opts) => {
+    const x = info[i];
+    if (!x.onStep) return { score: 0, signal: 'HOLD', methods: [] };
+    const win = closedBig.slice(Math.max(0, x.nClosed - FETCH_CANDLES), x.nClosed).map((c) => ({ close: c }));
+    win.push({ close: x.partial });
+    return evaluateAt(computeSeries(win), win.length - 1, opts);
   };
 }

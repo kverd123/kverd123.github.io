@@ -334,6 +334,7 @@
     const skipped = (u.skipped || []).map((x) => `${coin(x.symbol)} (${x.reason})`).join(', ');
     $('scanNote').textContent =
       `Alım: skor ≥ ${c.buyScore}${c.requireTrend ? ' ve fiyat EMA200 üstünde' : ''} · Satış: skor ≤ ${c.sellScore}. ` +
+      `Analiz: ${c.analysisMinutes ? `her ${c.analysisMinutes} dk (oluşan ${c.interval} mum dahil)` : `${c.interval} mum kapanışında`}. ` +
       'Simgelerin üzerine gelince ayrıntı görünür; satıra tıklayınca grafik değişir. ' +
       (c.symbols?.length ? 'Coin listesi sabit (SYMBOLS).' : `Liste hacme göre ilk ${c.topN} · güncelleme: ${fmtTime(u.updatedAt)}.`) +
       (skipped ? ` Elenen: ${skipped}.` : '');

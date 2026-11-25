@@ -211,3 +211,28 @@ test('fonlama ücreti açık pozisyon süresince birikir', () => {
   assert.ok(Math.abs(r.trades[0].funding - expected) < 1e-12);
   assert.ok(Math.abs(r.summary.totalPnl - (75 - expected)) < 1e-9);
 });
+
+test('intrabarEvaluator: oluşan büyük mumla analiz, canlı analizle aynı sonuç', async () => {
+  const { intrabarEvaluator } = await import('../src/backtest.js');
+  const { computeSeries, evaluateAt } = await import('../src/analysis.js');
+  const B = 4 * H; // büyük mum = 4 küçük (1s) mum
+  const small = [];
+  for (let i = 0; i < 300 * 4; i++) {
+    const c = 100 + Math.sin(i / 37) * 10 + i * 0.01;
+    small.push({ openTime: T0 + i * H, closeTime: T0 + (i + 1) * H - 1, open: c, high: c, low: c, close: c });
+  }
+  const bigCloses = [];
+  for (let g = 0; g < 300; g++) bigCloses.push(small[g * 4 + 3].close);
+  const opts = { buyScore: 3, sellScore: -2, requireTrend: true };
+
+  // sadece büyük mum kapanışında (everyMin = 240): son bar = son büyük mumun kapanışı
+  const evClose = intrabarEvaluator(small, B, 240);
+  assert.equal(evClose(null, 1198, opts).methods.length, 0, 'ara barda analiz yok');
+  const want = evaluateAt(computeSeries(bigCloses.map((close) => ({ close }))), 299, opts);
+  assert.deepEqual(evClose(null, 1199, opts), want);
+
+  // saatte bir: büyük mumun 2. küçük barında, oluşan mumun kapanışı o barın kapanışı
+  const evHourly = intrabarEvaluator(small, B, 60);
+  const partial = [...bigCloses.slice(0, 299), small[299 * 4 + 1].close].map((close) => ({ close }));
+  assert.deepEqual(evHourly(null, 299 * 4 + 1, opts), evaluateAt(computeSeries(partial), 299, opts));
+});

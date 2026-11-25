@@ -301,3 +301,42 @@ test('satılamayan pozisyon silinmez, sonra satılır; kısmi satışta kalan iz
   assert.deepEqual((await bot.tick()).actions, ['SELL BTCUSDT']);
   assert.equal(bot.state.positions.BTCUSDT, undefined);
 });
+
+// ---- ANALYSIS_MINUTES: mum kapanmadan analiz ----
+
+test('ANALYSIS_MINUTES: oluşan mum anlık fiyatla dahil edilir, N dakikada bir yenilenir', async () => {
+  const m = mockBinance({ markets: MARKETS() });
+  const config = loadConfig({ SYMBOLS: 'BTCUSDT', ANALYSIS_MINUTES: '30' });
+  const client = new BinanceClient({ baseUrl: 'https://x', fetchImpl: m.fetch });
+  const calls = [];
+  const evaluate = (series, i) => {
+    calls.push({ len: series.closes.length, last: series.closes[i] });
+    return { score: 4, signal: calls.length === 1 ? 'HOLD' : 'BUY', ready: true, methods: [] };
+  };
+  const bot = new TradingBot({ client, config, store: new JsonStore(null), logger: silentLogger, evaluate });
+  m.markets.BTCUSDT.price = 123;
+  await bot.tick();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].len, MARKETS().BTCUSDT.closes.length + 1, 'kapanmış mumlar + oluşan mum');
+  assert.equal(calls[0].last, 123, 'oluşan mumun kapanışı anlık fiyat');
+  assert.equal(bot.state.analysis.BTCUSDT.partial, true);
+  assert.ok(bot.state.analysis.BTCUSDT.nextAnalysisAt % (30 * 60e3) === 0);
+  // süre dolmadan yeniden analiz yok
+  await bot.tick();
+  assert.equal(calls.length, 1);
+  // 30 dakika geçti: yeniden analiz, sinyal hemen uygulanır (mum kapanışı beklenmez)
+  bot.state.analysis.BTCUSDT.nextAnalysisAt = 0;
+  assert.deepEqual((await bot.tick()).actions, ['BUY BTCUSDT']);
+  assert.equal(calls.length, 2);
+});
+
+test('ANALYSIS_MINUTES=0 (varsayılan): sadece kapanmış mumlar kullanılır', async () => {
+  const m = mockBinance({ markets: MARKETS() });
+  const bot = makeBot(m);
+  let len = 0;
+  bot.evaluate = (series) => { len = series.closes.length; return { score: 0, signal: 'HOLD', ready: true, methods: [] }; };
+  await bot.tick();
+  assert.equal(len, MARKETS().BTCUSDT.closes.length);
+  assert.equal(bot.state.analysis.BTCUSDT.partial, false);
+  assert.throws(() => loadConfig({ ANALYSIS_MINUTES: '0.5' }), /ANALYSIS_MINUTES/);
+});
