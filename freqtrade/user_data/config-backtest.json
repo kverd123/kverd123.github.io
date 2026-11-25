@@ -1,0 +1,12 @@
+{
+  "dry_run_wallet": 100,
+  "stake_amount": 20,
+  "max_open_trades": 5,
+  "exchange": {
+    "pair_whitelist": [
+      "BTC/USDT", "ETH/USDT", "SOL/USDT", "ZEC/USDT", "XRP/USDT",
+      "NEAR/USDT", "BNB/USDT", "PEPE/USDT", "DOGE/USDT", "UNI/USDT"
+    ]
+  },
+  "pairlists": [{ "method": "StaticPairList" }]
+}
