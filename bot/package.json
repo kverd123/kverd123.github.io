@@ -1,0 +1,17 @@
+{
+  "name": "kverd-binance-bot",
+  "version": "0.1.0",
+  "description": "Binance spot hesabına bağlı backend + al-sat botu (varsayılan: testnet, dry-run)",
+  "type": "module",
+  "private": true,
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "tick": "node src/index.js --once",
+    "backtest": "node src/backtest-cli.js",
+    "test": "node --test test/*.test.js"
+  }
+}
