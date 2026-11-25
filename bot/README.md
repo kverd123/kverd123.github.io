@@ -148,6 +148,24 @@ Rapor şunları gösterir:
 
 Veri `data-api.binance.vision` adresinden indirilir ve `data/history/` klasörüne önbelleklenir. Bu adrese erişiminiz yoksa https://data.binance.vision adresinden aylık CSV dosyalarını indirip `--csv BTCUSDT=dosya1.csv --csv ETHUSDT=dosya2.csv` ile verebilirsiniz.
 
+### Short (açığa satış) testi
+
+Backtest aracı vadeli işlem (futures) piyasasında short pozisyonu da simüle edebilir. **Canlı bot short yapmaz;** bu yalnızca bir araştırma aracıdır.
+
+```bash
+npm run backtest -- --direction short    # sadece short
+npm run backtest -- --direction both     # long + short
+```
+
+Kurallar ve varsayımlar:
+- 1x kaldıraç kullanılır.
+- Skor −3 veya altındaysa ve fiyat EMA200'ün altındaysa short açılır.
+- Skor +2 veya üstüne çıkınca ya da fiyat %8 yükselince short kapanır.
+- Komisyon %0,05 alınır.
+- Her 8 saatte %0,01 fonlama ücreti hesaplanır. Kötümser bir varsayımla, bu ücreti her iki yön de öder.
+- Fiyat iki katına çıkarsa pozisyon tasfiye olur ve teminat kaybedilir.
+- Fiyatlar spot piyasadan alınır. Vadeli işlem fiyatları buna çok yakındır ama birebir aynı değildir.
+
 > **Hayatta kalma yanlılığı:** Coin listesi bugünkü hacme göre seçilir. Bugün ilk 10'da olan coinler, çoğu zaman yakın geçmişte çok yükseldikleri için oradadır. Bu yüzden geçmiş test sonuçları gerçekte olacağından iyimser çıkar.
 
 > **Dikkat:** `--sweep` sonucunda en iyi çıkan ayar, büyük olasılıkla o döneme "ezberlenmiştir" (aşırı uyum). Seçtiğiniz ayarı mutlaka başka bir dönemde de deneyin. Bir ayar ancak iki dönemde de iyi sonuç veriyorsa anlamlıdır. Geçmiş sonuçlar geleceği garanti etmez.

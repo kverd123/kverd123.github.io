@@ -30,6 +30,11 @@ Strateji (varsayılanlar .env dosyasından):
   --amount 20         Pozisyon başına quote tutarı
   --max-trades 20     Günlük en fazla işlem
   --fee 0.1 --slippage 0.05
+  --direction long    long | short | both (short = vadeli işlem simülasyonu, 1x kaldıraç)
+  --short-score 3     Short açmak için skor ≤ -N (ve fiyat EMA200 altında)
+  --cover-score 2     Short kapatmak için skor ≥ N
+  --funding 0.01      Short/both için 8 saatlik fonlama ücreti % (kötümser: her yön öder)
+                      Short/both modunda komisyon varsayılanı %0.05 (futures)
 
 Çıktı:
   --trades            Tüm işlemleri listele
@@ -47,6 +52,7 @@ function parse() {
       days: s, from: s, to: s, interval: s,
       'buy-score': s, 'sell-score': s, 'no-trend': { type: 'boolean' },
       'max-open': s, sl: s, tp: s, amount: s, 'max-trades': s, fee: s, slippage: s,
+      direction: s, 'short-score': s, 'cover-score': s, funding: s,
       trades: { type: 'boolean' }, sweep: { type: 'boolean' }, json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -75,7 +81,8 @@ const dt = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
 function printSummary(s, o, q) {
   const line = (k, v) => console.log(`  ${k.padEnd(28)} ${v}`);
   console.log(
-    `\n=== Backtest: ${s.symbols} coin | ${o.interval} | alım skoru ≥${o.buyScore}${o.requireTrend ? ' + trend' : ''}, satış ≤${o.sellScore} | SL %${o.stopLossPct} TP %${o.takeProfitPct} ===`,
+    `\n=== Backtest [${o.direction}]: ${s.symbols} coin | ${o.interval} | long ≥${o.buyScore}/≤${o.sellScore}` +
+    `${o.direction !== 'long' ? ` short ≤-${o.shortScore}/≥${o.coverScore}` : ''}${o.requireTrend ? ' + trend' : ''} | SL %${o.stopLossPct} TP %${o.takeProfitPct} ===`,
   );
   line('Dönem', `${day(s.from)} → ${day(s.to)} (${s.candles} mum)`);
   line('Sermaye', `${f2(s.capital)} ${q} (${o.maxOpenPositions} pozisyon × ${o.orderQuoteAmount}; komisyon %${o.feePct}, kayma %${o.slippagePct})`);
@@ -90,8 +97,16 @@ function printSummary(s, o, q) {
   line('En büyük düşüş', `${f2(s.maxDrawdown)} ${q} (%${f2(s.maxDrawdownPct)})`);
   line('Ödenen komisyon', `${f2(s.feesPaid)} ${q}`);
   line('Pozisyonda geçen süre', `%${f2(s.exposurePct)} (aynı anda en çok ${s.maxConcurrent} pozisyon)`);
+  if (o.direction !== 'long') {
+    for (const [side, label] of [['long', 'Long'], ['short', 'Short']]) {
+      const b = s.bySide[side];
+      if (b.trades) line(`  ${label}`, `${b.trades} işlem, kazanma %${f2(b.winRatePct)}, K/Z ${sign(b.pnl)} ${q}, kâr fak. ${f2(b.profitFactor)}`);
+    }
+    line('Ödenen fonlama', `${f2(s.fundingPaid)} ${q} (8 saatte %${o.fundingPct})`);
+  }
   line('Çıkış nedenleri', Object.entries(s.exitReasons).map(([k, v]) => `${k}: ${v}`).join(', ') || '-');
 
+  if (o.direction !== 'long') console.log('\n  Not: Fiyatlar spot piyasadan; vadeli işlem fiyatları çok yakın seyreder ama birebir aynı değildir.');
   console.log('\n  Coin          İşlem  Kazanma%        K/Z   Kâr fak.   Al-tut%');
   for (const p of [...s.perSymbol].sort((a, b) => b.pnl - a.pnl)) {
     console.log(
@@ -161,7 +176,11 @@ async function main() {
     takeProfitPct: num(a.tp, cfg.takeProfitPct, 'tp'),
     orderQuoteAmount: num(a.amount, cfg.orderQuoteAmount, 'amount'),
     maxTradesPerDay: num(a['max-trades'], cfg.maxTradesPerDay, 'max-trades'),
-    feePct: num(a.fee, 0.1, 'fee'),
+    direction: a.direction || 'long',
+    shortScore: num(a['short-score'], 3, 'short-score'),
+    coverScore: num(a['cover-score'], 2, 'cover-score'),
+    fundingPct: num(a.funding, a.direction && a.direction !== 'long' ? 0.01 : 0, 'funding'),
+    feePct: num(a.fee, a.direction && a.direction !== 'long' ? 0.05 : 0.1, 'fee'),
     slippagePct: num(a.slippage, 0.05, 'slippage'),
   };
 

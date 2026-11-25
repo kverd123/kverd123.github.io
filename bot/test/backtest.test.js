@@ -153,3 +153,61 @@ test('CSV: başlık, mikrosaniye zaman damgası ve tekrarlar', () => {
   assert.equal(out[1].openTime, T0 + H);
   assert.equal(out[1].close, 2);
 });
+
+// ---- Short (vadeli işlem simülasyonu) ----
+
+// mum 5 kapanışında short sinyali (skor -4) -> mum 6 açılışında (20) short; mum 9'da kapat (skor +3) -> mum 10 açılışında (5)
+const DOWN = [20, 20, 20, 20, 20, 20, 20, 15, 10, 5, 5];
+const scoreAt = (map) => (_s, i, _o, symbol) => {
+  const score = map[symbol]?.[i] ?? 0;
+  return { score, signal: 'HOLD', methods: [{ key: 'trend', vote: score < 0 ? -1 : 1 }] };
+};
+
+test('short: düşüşte kazanır, komisyon ve kayma aleyhe uygulanır', () => {
+  const evaluate = scoreAt({ A: { 5: -4, 9: 3 } });
+  const r = runBacktest({ A: candles(DOWN) }, { ...base, evaluate, direction: 'short' });
+  assert.equal(r.trades.length, 1);
+  const t = r.trades[0];
+  assert.equal(t.side, 'short');
+  assert.equal(t.entryPrice, 20);
+  assert.equal(t.exitPrice, 5);
+  assert.equal(t.pnl, 75); // 5 adet × (20 − 5)
+  const f = runBacktest({ A: candles(DOWN) }, { ...base, evaluate, direction: 'short', feePct: 0.05, slippagePct: 0.05 });
+  const entry = 20 * 0.9995, qty = (100 * 0.9995) / entry, exit = 5 * 1.0005;
+  assert.ok(Math.abs(f.trades[0].pnl - (qty * (entry - exit) - 0.05 - qty * exit * 0.0005)) < 1e-9);
+  assert.equal(r.summary.bySide.short.trades, 1);
+});
+
+test('short: long modunda short açılmaz, both modunda açılır', () => {
+  const evaluate = scoreAt({ A: { 5: -4 } });
+  assert.equal(runBacktest({ A: candles(DOWN) }, { ...base, evaluate }).trades.length, 0);
+  assert.equal(runBacktest({ A: candles(DOWN) }, { ...base, evaluate, direction: 'both' }).trades[0].side, 'short');
+});
+
+test('short: trend şartı (fiyat EMA200 üstündeyse short yok)', () => {
+  const evaluate = () => ({ score: -4, signal: 'HOLD', methods: [{ key: 'trend', vote: 1 }] });
+  assert.equal(runBacktest({ A: candles(DOWN) }, { ...base, evaluate, direction: 'short' }).trades.length, 0);
+  assert.ok(runBacktest({ A: candles(DOWN) }, { ...base, evaluate, direction: 'short', requireTrend: false }).trades.length > 0);
+});
+
+test('short: zarar durdur yükselişte tetiklenir; boşlukta tasfiye ve kayıp teminatla sınırlı', () => {
+  const UP = [20, 20, 20, 20, 20, 20, 20, 21, 30, 30, 30];
+  const evaluate = scoreAt({ A: { 5: -4 } });
+  const sl = runBacktest({ A: candles(UP, { highs: { 7: 22 } }) }, { ...base, evaluate, direction: 'short', stopLossPct: 8 });
+  assert.equal(sl.trades[0].reason, 'zarar durdur');
+  assert.equal(sl.trades[0].exitPrice, 21.6);
+  assert.ok(Math.abs(sl.trades[0].pnl - -8) < 1e-9);
+  // fiyat 50'den açılıyor (2,5 kat): tasfiye, kayıp = teminat
+  const gap = runBacktest({ A: candles(UP, { opens: { 7: 50 }, highs: { 7: 50 } }) }, { ...base, evaluate, direction: 'short', stopLossPct: 8 });
+  assert.equal(gap.trades[0].reason, 'tasfiye');
+  assert.equal(gap.trades[0].pnl, -100);
+});
+
+test('fonlama ücreti açık pozisyon süresince birikir', () => {
+  const evaluate = scoreAt({ A: { 5: -4, 9: 3 } });
+  const r = runBacktest({ A: candles(DOWN) }, { ...base, evaluate, direction: 'short', fundingPct: 0.01 });
+  // 6..9. mumlar açık (4 saatlik değil, 1 saatlik mumlar): her mumda qty × kapanış × 0,0001 × 1/8
+  const expected = 5 * (20 + 15 + 10 + 5) * 0.0001 / 8;
+  assert.ok(Math.abs(r.trades[0].funding - expected) < 1e-12);
+  assert.ok(Math.abs(r.summary.totalPnl - (75 - expected)) < 1e-9);
+});
